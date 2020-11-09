@@ -73,13 +73,13 @@ import qualified Text.PrettyPrint.Highlight as P
 ----------------------------------------------------------------------
 
 -- | The required information to define a @Maude functional module@.
-data MaudeSig = MaudeSig
+data MaudeSig = MaudeSig  --MYTODO add new field with custom sorts
     { enableDH           :: Bool
     , enableBP           :: Bool
     , enableMSet         :: Bool
     , enableXor          :: Bool
     , enableDiff         :: Bool
-    , stFunSyms          :: S.Set NoEqSym -- ^ function signature for subterm theory
+    , stFunSyms          :: S.Set NoEqSym -- ^ function signature for subterm theory MYTODO: change to Set FunSym
     , stRules            :: S.Set CtxtStRule  -- ^ rewriting rules for subterm theory
 
     , funSyms            :: FunSig        -- ^ function signature including the

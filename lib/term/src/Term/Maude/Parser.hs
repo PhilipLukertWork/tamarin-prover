@@ -136,7 +136,7 @@ ppMaude t = case viewTerm t of
 ------------------------------------------------------------------------------
 
 -- | The term algebra and rewriting rules as a functional module in Maude.
-ppTheory :: MaudeSig -> ByteString
+ppTheory :: MaudeSig -> ByteString  --MYTODO add the sorts and subsorts in maude
 ppTheory msig = BC.unlines $
     [ "fmod MSG is"
     , "  protecting NAT ."

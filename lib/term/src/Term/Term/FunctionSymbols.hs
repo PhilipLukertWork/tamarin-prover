@@ -78,7 +78,7 @@ import qualified Data.Set as S
 ----------------------------------------------------------------------
 
 -- | AC function symbols.
-data ACSym = Union | Mult | Xor
+data ACSym = Union | Mult | Xor  --MYTODO | EqSym with type EqSym = (ByteString, (Int, Privacy)) or re-use NoEqSym
   deriving (Eq, Ord, Typeable, Data, Show, Generic, NFData, Binary)
 
 -- | A function symbol can be either Private (unknown to adversary) or Public.
