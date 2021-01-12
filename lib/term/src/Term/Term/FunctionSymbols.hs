@@ -78,7 +78,7 @@ import qualified Data.Set as S
 ----------------------------------------------------------------------
 
 -- | AC function symbols.
-data ACSym = Union | Mult | Xor  --MYTODO | EqSym with type EqSym = (ByteString, (Int, Privacy)) or re-use NoEqSym
+data ACSym = Union | Mult | Xor  --TODO-MY | EqSym with type EqSym = (ByteString, (Int, Privacy)) or re-use NoEqSym
   deriving (Eq, Ord, Typeable, Data, Show, Generic, NFData, Binary)
 
 -- | A function symbol can be either Private (unknown to adversary) or Public.
@@ -103,7 +103,7 @@ data FunSym = NoEq  NoEqSym   -- ^ a free function function symbol of a given ar
 type FunSig = Set FunSym
 
 -- | NoEq function signatures.
-type NoEqFunSig = Set NoEqSym
+type NoEqFunSig = Set NoEqSym  --COMMENT-MY used to group symbols, e.g., in Builtin/Signature
 
 ----------------------------------------------------------------------
 -- Fixed function symbols

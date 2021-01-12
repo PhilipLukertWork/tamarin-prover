@@ -8,14 +8,14 @@
 -- AC unification based on maude and free unification.
 module Term.Unification (
   -- * Unification modulo AC
-    unifyLTerm
+    unifyLTerm  --TODO-MY-NONUM not used outside - why do we expose this?
   , unifyLNTerm
   , unifiableLNTerms
 
-  , unifyLTermFactored
+  , unifyLTermFactored  --TODO-MY-NONUM not used outside - why do we expose this?
   , unifyLNTermFactored
 
-  -- * Unification without AC
+  -- * Unification without AC  --TODO-MY-NONUM remove all NoAC versions; they are unused
   , unifyLTermNoAC
   , unifyLNTermNoAC
   , unifiableLNTermsNoAC

@@ -153,14 +153,14 @@ import           Term.VTerm
 data LSort = LSortPub   -- ^ Arbitrary public names.
            | LSortFresh -- ^ Arbitrary fresh names.
            | LSortMsg   -- ^ Arbitrary messages.
-           | LSortNode  -- ^ Sort for variables denoting nodes of derivation graphs.
+           | LSortNode  -- ^ Sort for variables denoting nodes of derivation graphs.  --TODO-MY add LSortNum
            deriving( Eq, Ord, Show, Enum, Bounded, Typeable, Data, Generic, NFData, Binary )
 
 -- | @sortCompare s1 s2@ compares @s1@ and @s2@ with respect to the partial order on sorts.
 --   Partial order: Node      Msg
 --                           /   \
 --                         Pub  Fresh
-sortCompare :: LSort -> LSort -> Maybe Ordering
+sortCompare :: LSort -> LSort -> Maybe Ordering  --TODO-MY take care that this is still correct; update the above figure 
 sortCompare s1 s2 = case (s1, s2) of
     (a, b) | a == b          -> Just EQ
     -- Node is incomparable to all other sorts, invalid input
@@ -178,6 +178,7 @@ sortPrefix LSortMsg   = ""
 sortPrefix LSortFresh = "~"
 sortPrefix LSortPub   = "$"
 sortPrefix LSortNode  = "#"
+--TODO-MY add LSortNum
 
 -- | @sortSuffix s@ is the suffix we use for annotating variables of sort @s@.
 sortSuffix :: LSort -> String
@@ -185,6 +186,7 @@ sortSuffix LSortMsg   = "msg"
 sortSuffix LSortFresh = "fresh"
 sortSuffix LSortPub   = "pub"
 sortSuffix LSortNode  = "node"
+--TODO-MY add LSortNum
 
 
 ------------------------------------------------------------------------------
@@ -196,7 +198,7 @@ newtype NameId = NameId { getNameId :: String }
     deriving( Eq, Ord, Typeable, Data, Generic, NFData, Binary )
 
 -- | Tags for names.
-data NameTag = FreshName | PubName | NodeName
+data NameTag = FreshName | PubName | NodeName  --TODO-MY add NumName
     deriving( Eq, Ord, Show, Typeable, Data, Generic, NFData, Binary )
 
 -- | Names.
@@ -213,9 +215,10 @@ type NTerm v = VTerm Name v
 instance IsConst Name where
 
 instance Show Name where
-  show (Name FreshName  n) = "~'" ++ show n ++ "'"
+  show (Name FreshName  n) = "~'" ++ show n ++ "'"  --TODO-MY-NONUM use sortPrefix
   show (Name PubName    n) = "'"  ++ show n ++ "'"
   show (Name NodeName   n) = "#'" ++ show n ++ "'"
+--TODO-MY add NumName
 
 instance Show NameId where
   show = getNameId
@@ -231,15 +234,18 @@ freshTerm = lit . Con . Name FreshName . NameId
 pubTerm :: String -> NTerm v
 pubTerm = lit . Con . Name PubName . NameId
 
+--TODO-MY add NumTerm
+
 -- | Return 'LSort' for given 'Name'.
 sortOfName :: Name -> LSort
 sortOfName (Name FreshName _) = LSortFresh
 sortOfName (Name PubName   _) = LSortPub
 sortOfName (Name NodeName  _) = LSortNode
+--TODO-MY add NumName
 
 -- | Is a term a public constant?
 isPubConst :: LNTerm -> Bool
-isPubConst (viewTerm -> Lit (Con v)) = (sortOfName v == LSortPub)
+isPubConst (viewTerm -> Lit (Con v)) = (sortOfName v == LSortPub)  --TODO-MY add LSortNum
 isPubConst _                         = False
 
 
@@ -278,7 +284,7 @@ sortOfLTerm :: Show c => (c -> LSort) -> LTerm c -> LSort
 sortOfLTerm sortOfConst t = case viewTerm2 t of
     Lit2 (Con c)  -> sortOfConst c
     Lit2 (Var lv) -> lvarSort lv
-    _             -> LSortMsg
+    _             -> LSortMsg  --TODO-MY adapt because functions can return non-msg-sort!!!!!
 
 -- | Returns the most precise sort of an 'LNTerm'.
 sortOfLNTerm :: LNTerm -> LSort
@@ -292,17 +298,19 @@ sortOfLit (Var v) = lvarSort v
 -- | Is a term a message variable?
 isMsgVar :: LNTerm -> Bool
 isMsgVar (viewTerm -> Lit (Var v)) = (lvarSort v == LSortMsg)
-isMsgVar _                         = False
+isMsgVar _                         = False  --TODO-MY understand better how this is used - maybe something needs to be done?
 
 -- | Is a term a public variable?
 isPubVar :: LNTerm -> Bool
 isPubVar (viewTerm -> Lit (Var v)) = (lvarSort v == LSortPub)
-isPubVar _                         = False
+isPubVar _                         = False  --TODO-MY understand better how this is used - maybe something needs to be done?
 
 -- | Is a term a fresh variable?
 isFreshVar :: LNTerm -> Bool
 isFreshVar (viewTerm -> Lit (Var v)) = (lvarSort v == LSortFresh)
-isFreshVar _                         = False
+isFreshVar _                         = False  --TODO-MY understand better how this is used - maybe something needs to be done?
+
+--TODO-MY maybe isNumVar is needed?
 
 -- | If the term is a variable, return it, nothing otherwise.
 getVar :: LNTerm -> Maybe LVar
@@ -319,21 +327,21 @@ getMsgVar _                                                    = Nothing
 -------------------------------------------
 
 -- | The non-inverse factors of a term.
-niFactors :: LNTerm -> [LNTerm]
+niFactors :: LNTerm -> [LNTerm]  --TODO-MY pay special attention to this!!
 niFactors t = case viewTerm2 t of
                 FMult ts -> concatMap niFactors ts
                 FInv t1  -> niFactors t1
                 _        -> [t]
 
 -- | @containsPrivate t@ returns @True@ if @t@ contains private function symbols.
-containsPrivate :: Term t -> Bool
+containsPrivate :: Term t -> Bool  --NOTTODO-MY this function is all-fine; nothing to do as non-Private is only diff
 containsPrivate t = case viewTerm t of
     Lit _                          -> False
     FApp (NoEq (_,(_,Private))) _  -> True
     FApp _                      as -> any containsPrivate as
 
 -- | containsNoPrivateExcept t t2@ returns @True@ if @t2@ contains private function symbols other than @t@.
-containsNoPrivateExcept :: [BC.ByteString] -> Term t -> Bool
+containsNoPrivateExcept :: [BC.ByteString] -> Term t -> Bool  --NOTTODO-MY like the above
 containsNoPrivateExcept funs t = case viewTerm t of
     Lit _                          -> True
     FApp (NoEq (f,(_,Private))) as -> (elem f funs) && (all (containsNoPrivateExcept funs) as)
@@ -343,19 +351,19 @@ containsNoPrivateExcept funs t = case viewTerm t of
 -- | A term is *simple* iff there is an instance of this term that can be
 -- constructed from public names only. i.e., the term does not contain any
 -- fresh names, fresh variables, or private function symbols.
-isSimpleTerm :: LNTerm -> Bool
+isSimpleTerm :: LNTerm -> Bool  --NOTTODO-MY should be fine like this
 isSimpleTerm t =
     not (containsPrivate t) && 
     (getAll . foldMap (All . (LSortFresh /=) . sortOfLit) $ t)
 
 -- | 'True' iff no instance of this term contains fresh names or private function symbols.
-neverContainsFreshPriv :: LNTerm -> Bool
+neverContainsFreshPriv :: LNTerm -> Bool  --TODO-MY probably nothing to change but double-check the WF-condition that uses this
 neverContainsFreshPriv t =
     not (containsPrivate t) && 
     (getAll . foldMap (All . (`notElem` [LSortMsg, LSortFresh]) . sortOfLit) $ t)
 
 -- | Replaces all Fresh variables with constants using toConst.
-freshToConst :: LNTerm -> LNTerm
+freshToConst :: LNTerm -> LNTerm  --NOTTODO-MY
 freshToConst t = case viewTerm t of
     Lit (Con _)                              -> t
     Lit (Var v) | (lvarSort v == LSortFresh) -> variableToConst v
@@ -371,7 +379,7 @@ variableToConst cvar = constTerm (Name (nameOfSort cvar) (NameId ("constVar_" ++
 
     nameOfSort (LVar _ LSortFresh _) = FreshName
     nameOfSort (LVar _ LSortPub   _) = PubName
-    nameOfSort (LVar _ LSortNode  _) = NodeName
+    nameOfSort (LVar _ LSortNode  _) = NodeName  --TODO-MY add NumName
     nameOfSort (LVar _ LSortMsg   _) = error "Invalid sort Msg"
 
 
@@ -380,23 +388,23 @@ variableToConst cvar = constTerm (Name (nameOfSort cvar) (NameId ("constVar_" ++
 
 -- | Extract a variable of the given sort from a term that may be such a
 -- variable. Use 'termVar', if you do not want to restrict the sort.
-ltermVar :: LSort -> LTerm c -> Maybe LVar
+ltermVar :: LSort -> LTerm c -> Maybe LVar  --NOTTODO-MY
 ltermVar s t = do v <- termVar t; guard (s == lvarSort v); return v
 
 -- | Extract a variable of the given sort from a term that must be such a
 -- variable. Fails with an error, if that is not possible.
-ltermVar' :: Show c => LSort -> LTerm c -> LVar
+ltermVar' :: Show c => LSort -> LTerm c -> LVar  --NOTTODO-MY
 ltermVar' s t =
     fromJustNote err (ltermVar s t)
   where
     err = "ltermVar': expected variable term of sort " ++ show s ++ ", but got " ++ show t
 
 -- | Extract a node-id variable from a term that may be a node-id variable.
-ltermNodeId  :: LTerm c -> Maybe LVar
+ltermNodeId  :: LTerm c -> Maybe LVar  --NOTTODO-MY
 ltermNodeId = ltermVar LSortNode
 
 -- | Extract a node-id variable from a term that must be a node-id variable.
-ltermNodeId' :: Show c => LTerm c -> LVar
+ltermNodeId' :: Show c => LTerm c -> LVar  --NOTTODO-MY
 ltermNodeId' = ltermVar' LSortNode
 
 
