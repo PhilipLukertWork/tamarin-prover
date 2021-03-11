@@ -206,7 +206,7 @@ ppTheory msig = BC.unlines $
     (if enableNat msig
        then
        [ theoryOp "tone : -> TamNat"
-       , theoryOp $ "tplus : TamNat TamNat -> TamNat [comm assoc id: " <> funSymPrefix <> "tzero]" ]
+       , theoryOp $ "tplus : TamNat TamNat -> TamNat [comm assoc]" ]  --TODO-UNCERTAIN removed zero
        else [])
     ++
     (catMaybes $ map theoryUserACSyms (S.toList $ userACSyms msig))
