@@ -108,7 +108,11 @@ toRestriction rstr = Restriction (pRstrName rstr) (pRstrFormula rstr)
 parseOpenTheory :: [String] -- ^ Defined flags
                 -> FilePath
                 -> IO OpenTheory
-parseOpenTheory flags file = parseFile (theory flags) file
+parseOpenTheory flags file = do
+                               thy <- parseFile (theory flags) file
+                               putStrLn $ render (prettyOpenTheory thy)
+                               return thy
+--TODO-UNDEBUG
 
 -- | Parse a security protocol theory file.
 parseOpenDiffTheory :: [String] -- ^ Defined flags
