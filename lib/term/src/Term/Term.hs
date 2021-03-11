@@ -26,6 +26,7 @@ module Term.Term (
     , fAppPair
     , fAppFst
     , fAppSnd
+    , fAppNatOne
 
     -- ** Destructors and classifiers
     , isPair
@@ -49,7 +50,7 @@ module Term.Term (
     , ACSym(..)
     , CSym(..)
     , Privacy(..)
-    , NoEqSym
+    , NoEqSym(..)
 
     -- ** Signatures
     , FunSig
@@ -62,6 +63,8 @@ module Term.Term (
     , pmultSymString
     , emapSymString
     , unionSymString
+    , natPlusSymString
+    , natOneSymString
     , oneSymString
     , multSymString
     , zeroSymString
@@ -71,6 +74,7 @@ module Term.Term (
     , diffSym
     , expSym
     , pmultSym
+    , natOneSym
     , oneSym
     , zeroSym
 
@@ -78,6 +82,7 @@ module Term.Term (
     , dhFunSig
     , bpFunSig
     , msetFunSig
+    , natFunSig
     , xorFunSig
     , pairFunSig
     , dhReducibleFunSig
@@ -112,6 +117,10 @@ fAppOne = fAppNoEq oneSym []
 
 fAppZero :: Term a
 fAppZero = fAppNoEq zeroSym []
+
+-- | Smart constructors for one on naturals.
+fAppNatOne :: Term a
+fAppNatOne  = fAppNoEq natOneSym []
 
 -- | Smart constructors for diff, pair, exp, pmult, and emap.
 fAppDiff, fAppPair, fAppExp, fAppPMult :: (Term a, Term a) -> Term a
@@ -173,12 +182,12 @@ isUnion _                       = False
 
 -- | 'True' iff the term is a nullary, public function.
 isNullaryPublicFunction :: Term a -> Bool
-isNullaryPublicFunction (viewTerm -> FApp (NoEq (_, (0, Public))) _) = True
-isNullaryPublicFunction _                                            = False
+isNullaryPublicFunction (viewTerm -> FApp (NoEq (NoEqSym _ 0 Public _)) _) = True
+isNullaryPublicFunction _                                                  = False
 
 isPrivateFunction :: Term a -> Bool
-isPrivateFunction (viewTerm -> FApp (NoEq (_, (_,Private))) _) = True
-isPrivateFunction _                                            = False
+isPrivateFunction (viewTerm -> FApp (NoEq (NoEqSym _ _ Private _)) _) = True
+isPrivateFunction _                                                   = False
 
 -- | 'True' iff the term is an AC-operator.
 isAC :: Show a => Term a -> Bool
@@ -225,7 +234,7 @@ allProtSubterms _                                     = []
 
 -- | Convert a function symbol to its name.
 showFunSymName :: FunSym -> String
-showFunSymName (NoEq (bs, _)) = BC.unpack bs
+showFunSymName (NoEq (NoEqSym bs _ _ _)) = BC.unpack bs
 showFunSymName (AC op)        = show op
 showFunSymName (C op )           = show op
 showFunSymName List              = "List"
@@ -236,19 +245,34 @@ prettyTerm ppLit = ppTerm
   where
     ppTerm t = case viewTerm t of
         Lit l                                     -> ppLit l
-        FApp (AC o)        ts                     -> ppTerms (ppACOp o) 1 "(" ")" ts
-        FApp (NoEq s)      [t1,t2] | s == expSym  -> ppTerm t1 <> text "^" <> ppTerm t2
-        FApp (NoEq s)      [t1,t2] | s == diffSym -> text "diff" <> text "(" <> ppTerm t1 <> text ", " <> ppTerm t2 <> text ")"
-        FApp (NoEq s)      _       | s == pairSym -> ppTerms ", " 1 "<" ">" (split t)
-        FApp (NoEq (f, _)) []                     -> text (BC.unpack f)
-        FApp (NoEq (f, _)) ts                     -> ppFun f ts
+        -- AC terms
+        FApp (AC (UserAC f _)) ts                 -> ppUserAC f ts
+        FApp (AC o)            ts                 -> ppTerms (ppACOp o) 1 "(" ")" ts
+        -- Special NoEq terms
+        FApp (NoEq s)   [t1,t2] | s == expSym     -> ppTerm t1 <> text "^" <> ppTerm t2
+        FApp (NoEq s)   [t1,t2] | s == diffSym    -> text "diff" <> text "(" <> ppTerm t1 <> text ", " <> ppTerm t2 <> text ")"
+        FApp (NoEq s)   []      | s == natOneSym  -> text "1"
+        FApp (NoEq s)   _       | s == pairSym    -> ppTerms ", " 1 "<" ">" (split t)
+        -- Generic NoEq terms
+        FApp (NoEq (NoEqSym f _ _ _)) []          -> text (BC.unpack f)
+        FApp (NoEq (NoEqSym f _ _ _)) ts          -> ppFun f ts
+        -- Others
         FApp (C EMap)      ts                     -> ppFun emapSymString ts
         FApp List          ts                     -> ppFun "LIST" ts
 
-    ppACOp Mult  = "*"
-    ppACOp Union = "+"
-    ppACOp Xor   = "⊕"
+    ppACOp Mult    = "*"
+    ppACOp Xor     = "⊕"
+    ppACOp Union   = "+"
+    ppACOp NatPlus = "++"
+    -- Note: User AC symbols are not pretty-printed as infix ops, but we
+    -- specify this for completeness in case this changes in the future.
+    ppACOp (UserAC sym _) = " `" ++ sym ++ "` "
 
+    ppUserAC f (t:ts) 
+      | null ts   = ppTerm t
+      | otherwise = text f <> text "(" <> ppTerm t <> text ", " <> ppUserAC f ts <> text ")"
+    ppUserAC _ [] = text "" 
+ 
     ppTerms sepa n lead finish ts =
         fcat . (text lead :) . (++[text finish]) .
             map (nest n) . punctuate (text sepa) . map ppTerm $ ts

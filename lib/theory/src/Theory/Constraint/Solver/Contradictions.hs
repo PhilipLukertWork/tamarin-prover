@@ -91,7 +91,7 @@ contradictions ctxt sys = F.asum
     -- CR-rule **
     [ guard (D.cyclic $ rawLessRel sys)             *> pure Cyclic
     -- CR-rule *N1*
-    , guard (hasNonNormalTerms sig sys)             *> pure NonNormalTerms
+    , guard (hasNonNormalTerms sig sys)             *> pure NonNormalTerms  --TODO-UNCERTAIN: removed iterated functions
     -- FIXME: add CR-rule
     , guard (hasForbiddenKD sys)                    *> pure ForbiddenKD
     -- FIXME: add CR-rule

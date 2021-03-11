@@ -917,7 +917,7 @@ injRanking ctxt allowLoopBreakers sys =
         _                                                  -> False
 
     isSignatureGoal goal = case msgPremise goal of
-        Just (viewTerm -> FApp (NoEq (f, _)) _) | (BC.unpack f) == "sign" -> True
+        Just (viewTerm -> FApp (NoEq (NoEqSym f _ _ _)) _) | (BC.unpack f) == "sign" -> True
         _                                                                 -> False
 
     -- Be conservative on splits that don't exist.
@@ -999,7 +999,7 @@ smartRanking ctxt allowPremiseGLoopBreakers sys =
         _                                                  -> False
 
     isSignatureGoal goal = case msgPremise goal of
-        Just (viewTerm -> FApp (NoEq (f, _)) _) | (BC.unpack f) == "sign" -> True
+        Just (viewTerm -> FApp (NoEq (NoEqSym f _ _ _)) _) | (BC.unpack f) == "sign" -> True
         _                                                                 -> False
 
     -- Be conservative on splits that don't exist.

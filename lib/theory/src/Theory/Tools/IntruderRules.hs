@@ -18,6 +18,7 @@ module Theory.Tools.IntruderRules (
   , mkDUnionRule
   , specialIntruderRules
   , variantsIntruder
+  , natIntruderRules
 
   -- ** Classifiers
   , isDExpRule
@@ -62,7 +63,7 @@ rule coerce:
    [ KD( x ) ] --[ KU( x ) ]-> [ KU( x ) ]
 
 rule pub:
-   [ ] --[ KU( $x ) ]-> [ KU( $x ) ]
+   [ ] --[ KU( $x ) ]-> [ KU( $x ) ]  --TODO-UNCERTAIN make sure nat is public
 
 rule gen_fresh:
    [ Fr( ~x ) ] --[ KU( ~x ) ]-> [ KU( ~x ) ]
@@ -111,7 +112,7 @@ destructionRules bool (CtxtStRule lhs@(viewTerm -> FApp _ _) (StRhs (pos:[]) rhs
     go _      _                       []     _ _                     = []
     -- term already in premises, but necessary for constant conclusions
     go _      (viewTerm -> FApp _ _)  (_:[]) _ _ | (frees rhs /= []) = []
-    go uprems (viewTerm -> FApp (NoEq (f,(_,Public))) as) (i:p) n pd =
+    go uprems (viewTerm -> FApp (NoEq (NoEqSym f _ Public _)) as) (i:p) n pd =
         irule ++ go uprems' t' p funs posname
       where
         uprems' = uprems++[ t | (j, t) <- zip [0..] as, i /= j ]
@@ -124,7 +125,7 @@ destructionRules bool (CtxtStRule lhs@(viewTerm -> FApp _ _) (StRhs (pos:[]) rhs
                             ((kdFact  t'):(map kuFact uprems'))
                             [kdFact rhs] [] [] ]
                 else []
-    go _      (viewTerm -> FApp (NoEq (_,(_,Private))) _) _     _ _  = []
+    go _      (viewTerm -> FApp (NoEq (NoEqSym _ _ Public _)) _) _     _ _  = []
     go _      (viewTerm -> Lit _)                         (_:_) _ _  =
         error "IntruderRules.destructionRules: impossible, position invalid"   
      
@@ -138,7 +139,7 @@ destructionRules _ _ = []
 privateConstructorEquations :: [CtxtStRule] -> [(LNTerm, ByteString)]
 privateConstructorEquations rs = case rs of
     []    -> []
-    (CtxtStRule lhs (StRhs _ (viewTerm -> FApp (NoEq (vname,(0,Private))) _))):xs
+    (CtxtStRule lhs (StRhs _ (viewTerm -> FApp (NoEq (NoEqSym vname 0 Private Nothing)) _))):xs  --TODO-UNCERTAIN: not sure whether the Nothing is correct
           -> (lhs, vname):(privateConstructorEquations xs)
     _:xs  -> privateConstructorEquations xs
     
@@ -158,7 +159,7 @@ privateConstructorRules rules = map createRule $ derivablePrivateConstants (priv
   where
     -- creates a constructor rule for constant s
     createRule s = Rule (ConstrRule (append (pack "_") s)) [] [concfact] [concfact] []
-      where m        = fAppNoEq (s,(0,Private)) []
+      where m        = fAppNoEq (NoEqSym s 0 Private Nothing) []
             concfact = kuFact m
 
 -- | Simple removal of subsumed rules for auto-generated subterm intruder rules.
@@ -194,11 +195,11 @@ subtermIntruderRules diff maudeSig =
 -- function signature @fSig@
 constructionRules :: NoEqFunSig -> [IntrRuleAC]
 constructionRules fSig =
-    [ createRule s k | (s,(k,Public)) <- S.toList fSig ]
+    [ createRule s k | (NoEqSym s k Public _) <- S.toList fSig ]
   where
     createRule s k = Rule (ConstrRule (append (pack "_") s)) (map kuFact vars) [concfact] [concfact] []
       where vars     = take k [ varTerm (LVar "x"  LSortMsg i) | i <- [0..] ]
-            m        = fAppNoEq (s,(k,Public)) vars
+            m        = fAppNoEq (NoEqSym s k Public Nothing) vars
             concfact = kuFact m
 
 ------------------------------------------------------------------------------
@@ -406,6 +407,29 @@ bpVariantsIntruder hnd ru = do
         mappings = substToListVFresh subst
         doms     = map fst mappings
         rngs     = map snd mappings
+
+------------------------------------------------------------------------------
+-- Natural numbers intruder rules
+------------------------------------------------------------------------------
+
+-- TODO-UNCERTAIN: these two rules should be unused if nat is public [remove completely after making nat public]
+natIntruderRules :: [IntrRuleAC]
+natIntruderRules =
+    []
+--    mkCPlusRule x_var y_var
+--    , kuRule (ConstrRule natOneSymString) [] (fAppNoEq natOneSym [])
+--    ] 
+--  where
+--    x_var = varTerm (LVar "x" LSortNat 0)
+--    y_var = varTerm (LVar "y" LSortNat 0)
+--    kuRule name prems t = Rule name prems [kuFact t] [kuFact t]
+
+--mkCPlusRule :: LNTerm -> LNTerm -> IntrRuleAC
+--mkCPlusRule x_var y_var =
+--    Rule (ConstrRule natPlusSymString)
+--         [kuFact x_var, kuFact y_var]
+--         [kuFact $ fAppAC NatPlus [x_var, y_var]] []
+
 
 ------------------------------------------------------------------------------
 -- Classification functions

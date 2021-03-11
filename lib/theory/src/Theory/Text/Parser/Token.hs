@@ -29,8 +29,10 @@ module Theory.Text.Parser.Token (
 
   , freshName
   , pubName
+  , natName
 
   , sortedLVar
+  , userSortedLVar
   , lvar
   , msgvar
   , nodevar
@@ -74,6 +76,7 @@ module Theory.Text.Parser.Token (
   , opSlash
   , opMinus
   , opPlus
+  , opUnion
   , opLeftarrow
   , opRightarrow
   , opLongleftarrow
@@ -91,6 +94,8 @@ module Theory.Text.Parser.Token (
   , commaSep
   , commaSep1
   , list
+  , wsSep
+  , commaSepN
 
     -- * Basic Parsing
   , Parser
@@ -234,6 +239,24 @@ commaSep1 = T.commaSep1 spthy
 list :: Parser a -> Parser [a]
 list = brackets . commaSep
 
+-- | A whitespace separated list of elements.
+wsSep :: Parser a -> Parser [a]
+wsSep p = sepBy p (T.whiteSpace spthy)
+
+-- | A comma separated list of elements.
+commaSepN :: [Parser a] -> Parser [a]
+commaSepN []     = return []
+commaSepN (p:ps) = do
+  r <- p
+  T.whiteSpace spthy
+  if not $ null ps
+    then do
+      void $ T.comma spthy
+      rs <- commaSepN ps
+      return $ r : rs
+    else
+      return [r]
+
 -- | A formal comment; i.e., (header, body)
 formalComment :: Parser (String, String)
 formalComment = T.lexeme spthy $ do
@@ -279,20 +302,48 @@ sortedLVar ss =
 
     mkPrefixParser s = do
         case s of
-          LSortMsg   -> pure ()
-          LSortPub   -> void $ char '$'
-          LSortFresh -> void $ char '~'
-          LSortNode  -> void $ char '#'
+          LSortMsg       -> pure ()
+          LSortPub       -> void $ char '$'
+          LSortFresh     -> void $ char '~'
+          LSortNode      -> void $ char '#'
+          LSortNat       -> void $ char ':'
+          (LSortUser st) -> do
+              void $ char '%'
+              symbol_ st
+              void $ char '%'
         (n, i) <- indexedIdentifier
         return (LVar n s i)
 
+-- | Parse a logical variable of an arbitrary user-defined sort.
+userSortedLVar :: Parser LVar
+userSortedLVar =
+    asum $ map try [suffixParser, prefixParser]
+  where
+    suffixParser = do
+        (n, i) <- indexedIdentifier <* colon
+        sort <- identifier
+        if elem sort $ map sortSuffix [LSortFresh, LSortPub, LSortNat, LSortNode, LSortMsg]
+          then fail "Invalid user-sort"
+          else return (LVar n (LSortUser sort) i)
+
+    prefixParser = do
+        void $ char '%'
+        sort <- identifier
+        void $ char '%'
+        (n, i) <- indexedIdentifier
+        return (LVar n (LSortUser sort) i)
+
 -- | An arbitrary logical variable.
 lvar :: Parser LVar
-lvar = sortedLVar [minBound..]
+lvar = asum $ map try
+  [ userSortedLVar
+  , sortedLVar [LSortFresh, LSortPub, LSortNat, LSortMsg, LSortNode] ]
 
 -- | Parse a non-node variable.
 msgvar :: Parser LVar
-msgvar = sortedLVar [LSortFresh, LSortPub, LSortMsg]
+msgvar = asum $ map try
+  [ userSortedLVar
+  , sortedLVar [LSortFresh, LSortPub, LSortNat, LSortMsg] ]
 
 -- | Parse a graph node variable.
 nodevar :: Parser NodeId
@@ -308,6 +359,10 @@ freshName = try (symbol "~" *> singleQuoted identifier)
 -- | Parse a literal public name, e.g., @'n'@.
 pubName :: Parser String
 pubName = singleQuoted identifier
+
+-- | Parse a literal nat name, e.g. @:'n'@.
+natName :: Parser String
+natName = try (symbol ":" *> singleQuoted identifier)
 
 
 -- Term Operators
@@ -328,9 +383,13 @@ opExp = symbol_ "^"
 opMult :: Parser ()
 opMult = symbol_ "*"
 
--- | The addition operator @*@.
+-- | The addition operator @++@.
 opPlus :: Parser ()
-opPlus = symbol_ "+"
+opPlus = symbol_ "++"
+
+-- | The multiset operator @+@.
+opUnion :: Parser ()
+opUnion = symbol_ "+"  --TODO-UNCERTAIN: didn't change this to union
 
 -- | The xor operator @XOR@ or @⊕@.
 opXor :: Parser ()

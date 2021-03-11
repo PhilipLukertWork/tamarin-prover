@@ -33,6 +33,7 @@ module Term.LTerm (
   -- ** Construction
   , freshTerm
   , pubTerm
+  , natTerm
 
   -- * LVar
   , LSort(..)
@@ -61,6 +62,9 @@ module Term.LTerm (
   , containsPrivate
   , containsNoPrivateExcept
   , neverContainsFreshPriv
+  , sortTypename
+  , sortFromString
+  , isUserSort
 
   -- ** Destructors
   , ltermVar
@@ -149,17 +153,26 @@ import           Term.VTerm
 --
 -- >  LSortFresh < LSortMsg
 -- >  LSortPub   < LSortMsg
+-- >  LSortNat   < LSortMsg
+-- >  LSortUser  < LSortMsg
 --
 data LSort = LSortPub   -- ^ Arbitrary public names.
            | LSortFresh -- ^ Arbitrary fresh names.
            | LSortMsg   -- ^ Arbitrary messages.
-           | LSortNode  -- ^ Sort for variables denoting nodes of derivation graphs.  --TODO-MY add LSortNum
-           deriving( Eq, Ord, Show, Enum, Bounded, Typeable, Data, Generic, NFData, Binary )
+           | LSortNode         -- ^ Sort for variables denoting nodes of derivation graphs.
+           | LSortNat          -- ^ Arbitrary natural numbers.
+           | LSortUser String  -- ^ Arbitrary user-defined sort.
+           deriving( Eq, Ord, Show, Typeable, Data, Generic, NFData, Binary )
 
 -- | @sortCompare s1 s2@ compares @s1@ and @s2@ with respect to the partial order on sorts.
---   Partial order: Node      Msg
---                           /   \
---                         Pub  Fresh
+-- Partial order:
+--     Node
+--
+--     Msg
+--     |-- Fresh
+--     |-- User
+--     |-- Pub
+--
 sortCompare :: LSort -> LSort -> Maybe Ordering  --TODO-MY take care that this is still correct; update the above figure 
 sortCompare s1 s2 = case (s1, s2) of
     (a, b) | a == b          -> Just EQ
@@ -174,18 +187,22 @@ sortCompare s1 s2 = case (s1, s2) of
 
 -- | @sortPrefix s@ is the prefix we use for annotating variables of sort @s@.
 sortPrefix :: LSort -> String
-sortPrefix LSortMsg   = ""
-sortPrefix LSortFresh = "~"
-sortPrefix LSortPub   = "$"
-sortPrefix LSortNode  = "#"
+sortPrefix LSortMsg       = ""
+sortPrefix LSortFresh     = "~"
+sortPrefix LSortPub       = "$"
+sortPrefix LSortNode      = "#"
+sortPrefix LSortNat       = ":"
+sortPrefix (LSortUser st) = "%" ++ st ++ "%"
 --TODO-MY add LSortNum
 
 -- | @sortSuffix s@ is the suffix we use for annotating variables of sort @s@.
 sortSuffix :: LSort -> String
-sortSuffix LSortMsg   = "msg"
-sortSuffix LSortFresh = "fresh"
-sortSuffix LSortPub   = "pub"
-sortSuffix LSortNode  = "node"
+sortSuffix LSortMsg       = "msg"
+sortSuffix LSortFresh     = "fresh"
+sortSuffix LSortPub       = "pub"
+sortSuffix LSortNode      = "node"
+sortSuffix LSortNat       = "nat"
+sortSuffix (LSortUser st) = st
 --TODO-MY add LSortNum
 
 
@@ -198,7 +215,7 @@ newtype NameId = NameId { getNameId :: String }
     deriving( Eq, Ord, Typeable, Data, Generic, NFData, Binary )
 
 -- | Tags for names.
-data NameTag = FreshName | PubName | NodeName  --TODO-MY add NumName
+data NameTag = FreshName | PubName | NodeName | NatName  --TODO-MY add NumName
     deriving( Eq, Ord, Show, Typeable, Data, Generic, NFData, Binary )
 
 -- | Names.
@@ -218,6 +235,7 @@ instance Show Name where
   show (Name FreshName  n) = "~'" ++ show n ++ "'"  --TODO-MY-NONUM use sortPrefix
   show (Name PubName    n) = "'"  ++ show n ++ "'"
   show (Name NodeName   n) = "#'" ++ show n ++ "'"
+  show (Name NatName   n) = ":'" ++ show n ++ "'"
 --TODO-MY add NumName
 
 instance Show NameId where
@@ -234,6 +252,9 @@ freshTerm = lit . Con . Name FreshName . NameId
 pubTerm :: String -> NTerm v
 pubTerm = lit . Con . Name PubName . NameId
 
+-- | @natTerm f@ represents the nat name @f@.
+natTerm :: String -> NTerm v
+natTerm = lit . Con . Name NatName . NameId
 --TODO-MY add NumTerm
 
 -- | Return 'LSort' for given 'Name'.
@@ -241,6 +262,7 @@ sortOfName :: Name -> LSort
 sortOfName (Name FreshName _) = LSortFresh
 sortOfName (Name PubName   _) = LSortPub
 sortOfName (Name NodeName  _) = LSortNode
+sortOfName (Name NatName   _) = LSortNat
 --TODO-MY add NumName
 
 -- | Is a term a public constant?
@@ -282,9 +304,12 @@ freshLVar n s = LVar n s <$> freshIdent n
 -- | Returns the most precise sort of an 'LTerm'.
 sortOfLTerm :: Show c => (c -> LSort) -> LTerm c -> LSort
 sortOfLTerm sortOfConst t = case viewTerm2 t of
-    Lit2 (Con c)  -> sortOfConst c
-    Lit2 (Var lv) -> lvarSort lv
-    _             -> LSortMsg  --TODO-MY adapt because functions can return non-msg-sort!!!!!
+    Lit2 (Con c)                          -> sortOfConst c
+    Lit2 (Var lv)                         -> lvarSort lv
+    FAppNoEq (NoEqSym _ _ _ (Just sts)) _ -> sortFromString $ last sts
+    FUserAC _ sort _                      -> sortFromString sort
+    FNatPlus _                            -> LSortNat
+    _                                     -> LSortMsg  --TODO-MY adapt because functions can return non-msg-sort!!!!!
 
 -- | Returns the most precise sort of an 'LNTerm'.
 sortOfLNTerm :: LNTerm -> LSort
@@ -334,24 +359,24 @@ niFactors t = case viewTerm2 t of
                 _        -> [t]
 
 -- | @containsPrivate t@ returns @True@ if @t@ contains private function symbols.
-containsPrivate :: Term t -> Bool  --NOTTODO-MY this function is all-fine; nothing to do as non-Private is only diff
+containsPrivate :: Term t -> Bool  --NOT-TODO-MY this function is all-fine; nothing to do as non-Private is only diff
 containsPrivate t = case viewTerm t of
-    Lit _                          -> False
-    FApp (NoEq (_,(_,Private))) _  -> True
-    FApp _                      as -> any containsPrivate as
+    Lit _                                  -> False
+    FApp (NoEq (NoEqSym _ _ Private _)) _  -> True
+    FApp _                              as -> any containsPrivate as
 
 -- | containsNoPrivateExcept t t2@ returns @True@ if @t2@ contains private function symbols other than @t@.
-containsNoPrivateExcept :: [BC.ByteString] -> Term t -> Bool  --NOTTODO-MY like the above
+containsNoPrivateExcept :: [BC.ByteString] -> Term t -> Bool  --NOT-TODO-MY like the above
 containsNoPrivateExcept funs t = case viewTerm t of
     Lit _                          -> True
-    FApp (NoEq (f,(_,Private))) as -> (elem f funs) && (all (containsNoPrivateExcept funs) as)
+    FApp (NoEq (NoEqSym f _ Private _)) as -> (elem f funs) && (all (containsNoPrivateExcept funs) as)
     FApp _                      as -> all (containsNoPrivateExcept funs) as
 
     
 -- | A term is *simple* iff there is an instance of this term that can be
 -- constructed from public names only. i.e., the term does not contain any
 -- fresh names, fresh variables, or private function symbols.
-isSimpleTerm :: LNTerm -> Bool  --NOTTODO-MY should be fine like this
+isSimpleTerm :: LNTerm -> Bool  --NOT-TODO-MY should be fine like this
 isSimpleTerm t =
     not (containsPrivate t) && 
     (getAll . foldMap (All . (LSortFresh /=) . sortOfLit) $ t)
@@ -363,7 +388,7 @@ neverContainsFreshPriv t =
     (getAll . foldMap (All . (`notElem` [LSortMsg, LSortFresh]) . sortOfLit) $ t)
 
 -- | Replaces all Fresh variables with constants using toConst.
-freshToConst :: LNTerm -> LNTerm  --NOTTODO-MY
+freshToConst :: LNTerm -> LNTerm  --NOT-TODO-MY
 freshToConst t = case viewTerm t of
     Lit (Con _)                              -> t
     Lit (Var v) | (lvarSort v == LSortFresh) -> variableToConst v
@@ -382,29 +407,52 @@ variableToConst cvar = constTerm (Name (nameOfSort cvar) (NameId ("constVar_" ++
     nameOfSort (LVar _ LSortNode  _) = NodeName  --TODO-MY add NumName
     nameOfSort (LVar _ LSortMsg   _) = error "Invalid sort Msg"
 
+-- | @sortTypename s@ is the string used for representing sort @s@ in function
+-- signatures (when defining custom functions).
+sortTypename :: LSort -> String
+sortTypename LSortMsg       = "Msg"
+sortTypename LSortFresh     = "Fresh"
+sortTypename LSortPub       = "Pub"
+sortTypename LSortNat       = "Nat"
+sortTypename (LSortUser st) = st
+sortTypename LSortNode      = error "sortTypename: May not use sort 'Node'."
+
+-- | @sortFromString t@ is the sort for a given typename @t@.
+sortFromString :: String -> LSort
+sortFromString "Msg"   = LSortMsg
+sortFromString "Fresh" = LSortFresh
+sortFromString "Pub"   = LSortPub
+sortFromString "Nat"   = LSortNat
+sortFromString "Node"  = error "sortFromString: May not use sort 'Node'."
+sortFromString st      = LSortUser st
+
+-- | Is this a user-defined sort?
+isUserSort :: LSort -> Bool
+isUserSort (LSortUser _) = True
+isUserSort _             = False
 
 -- Destructors
 --------------
 
 -- | Extract a variable of the given sort from a term that may be such a
 -- variable. Use 'termVar', if you do not want to restrict the sort.
-ltermVar :: LSort -> LTerm c -> Maybe LVar  --NOTTODO-MY
+ltermVar :: LSort -> LTerm c -> Maybe LVar  --NOT-TODO-MY
 ltermVar s t = do v <- termVar t; guard (s == lvarSort v); return v
 
 -- | Extract a variable of the given sort from a term that must be such a
 -- variable. Fails with an error, if that is not possible.
-ltermVar' :: Show c => LSort -> LTerm c -> LVar  --NOTTODO-MY
+ltermVar' :: Show c => LSort -> LTerm c -> LVar  --NOT-TODO-MY
 ltermVar' s t =
     fromJustNote err (ltermVar s t)
   where
     err = "ltermVar': expected variable term of sort " ++ show s ++ ", but got " ++ show t
 
 -- | Extract a node-id variable from a term that may be a node-id variable.
-ltermNodeId  :: LTerm c -> Maybe LVar  --NOTTODO-MY
+ltermNodeId  :: LTerm c -> Maybe LVar  --NOT-TODO-MY
 ltermNodeId = ltermVar LSortNode
 
 -- | Extract a node-id variable from a term that must be a node-id variable.
-ltermNodeId' :: Show c => LTerm c -> LVar  --NOTTODO-MY
+ltermNodeId' :: Show c => LTerm c -> LVar  --NOT-TODO-MY
 ltermNodeId' = ltermVar' LSortNode
 
 
@@ -479,8 +527,10 @@ instance Ord LVar where
         compare x3 y3 <> compare x2 y2 <> compare x1 y1
 
 instance Show LVar where
-    show (LVar v s i) =
-        sortPrefix s ++ body
+    show (LVar v s i)
+        | isUserSort s  = body ++ ":" ++ sortSuffix s
+        | s == LSortNat = body ++ ":" ++ sortSuffix s
+        | otherwise     = sortPrefix s ++ body
       where
         body | null v           = show i
 --             | isDigit (last v) = v ++ "." ++ show i
@@ -680,8 +730,10 @@ instance (HasFrees l, Ord l) => HasFrees (Term l) where
 
     foldFreesOcc f c t = case viewTerm t of
         Lit  l             -> foldFreesOcc f c l
-        FApp (NoEq o) as -> foldFreesOcc f ((BC.unpack . fst $ o):c) as
-        FApp o        as -> mconcat $ map (foldFreesOcc f (show o:c)) as
+        FApp (NoEq o) as   -> foldFreesOcc f (noEqOp o:c) as
+        FApp o        as   -> mconcat $ map (foldFreesOcc f (show o:c)) as
+      where
+        noEqOp (NoEqSym fs _ _ _) = BC.unpack fs
           -- AC or C symbols
 
     mapFrees f (viewTerm -> Lit l)                  = lit <$> mapFrees f l
