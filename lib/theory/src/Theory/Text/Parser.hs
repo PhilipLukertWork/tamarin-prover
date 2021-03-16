@@ -622,11 +622,13 @@ blatom = (fmap (fmapTerm (fmap Free))) <$> asum
   , flip Action <$> try (fact llit <* opAt)        <*> nodevarTerm   <?> "action atom"
   , Syntactic . Pred <$> try (fact llit)                             <?> "predicate atom"
   , Less        <$> try (nodevarTerm <* opLess)    <*> nodevarTerm   <?> "less atom"
+  , Less        <$> try (naturalTerm <* opLess)    <*> naturalTerm   <?> "less nat atom"
   , EqE         <$> try (msetterm False llit <* opEqual) <*> msetterm False llit <?> "term equality"
   , EqE         <$>     (nodevarTerm  <* opEqual)  <*> nodevarTerm   <?> "node equality"
   ]
   where
     nodevarTerm = (lit . Var) <$> nodevar
+    naturalTerm =  sortedLlit LSortNat
 
 -- | Parse an atom of a formula.
 fatom :: Parser  SyntacticLNFormula

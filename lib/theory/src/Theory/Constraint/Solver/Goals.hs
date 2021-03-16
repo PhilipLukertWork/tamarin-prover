@@ -127,7 +127,7 @@ openGoals sys = do
 
     return (goal, (get gsNr status, useful))
   where
-    existingDeps = rawLessRel sys
+    existingDeps = rawLessRelNodeId sys
     hasKUGuards  =
         any ((KUFact `elem`) . guardFactTags) $ S.toList $ get sFormulas sys
 
@@ -172,7 +172,7 @@ openGoals sys = do
     allMsgVarsKnownEarlier (i,_) args = (all isMsgVar args) &&
         (all (`elem` earlierMsgVars) args)
       where earlierMsgVars = do (j, _, t) <- allKUActions sys
-                                guard $ isMsgVar t && alwaysBefore sys j i
+                                guard $ isMsgVar t && alwaysBeforeNodeId sys j i
                                 return t
 
     -- check whether we have a chain that fits N5'' (an open chain between an
@@ -189,7 +189,7 @@ openGoals sys = do
             ku_start    = filter (\x -> (fst x) == t_start) $
                               map (\(i, _, m) -> (m, i)) $ allKUActions sys
             -- and check whether any of them happens before the KD-conclusion
-            ku_before   = any (\(_, x) -> alwaysBefore sys x (fst conc)) ku_start
+            ku_before   = any (\(_, x) -> alwaysBeforeNodeId sys x (fst conc)) ku_start
 
 ------------------------------------------------------------------------------
 -- Solving 'Goal's
@@ -257,7 +257,7 @@ solveAction rules (i, fa@(Fact _ ann _)) = do
     requiresKU t = do
         j <- freshLVar "vk" LSortNode
         let faKU = kuFact t
-        insertLess j i
+        insertLess (varTerm j) (varTerm i)
         void (insertAction j faKU)
 
 -- | CR-rules *DG_{2,P}* and *DG_{2,d}*: solve a premise with a direct edge

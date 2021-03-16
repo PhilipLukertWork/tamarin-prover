@@ -22,7 +22,7 @@ module Theory.Constraint.Solver.Reduction (
   , whenChanged
   , applyChangeList
   , whileChanging
-  
+
   -- ** Accessing the 'ProofContext'
   , getProofContext
   , getMaudeHandle
@@ -254,7 +254,7 @@ labelNodeId = \i rules parent -> do
           -- corresponding KU-actions before this node.
         _ | isKUFact fa -> do
               j <- freshLVar "vk" LSortNode
-              insertLess j i
+              insertLess (varTerm j) (varTerm i)
               void (insertAction j fa)
 
           -- Store premise goal for later processing using CR-rule *DG2_2*
@@ -310,7 +310,7 @@ insertAction i fa@(Fact _ ann _) = do
                 Just (UpK, viewTerm2 -> FInv m) -> do
                 -- In the diff case, add inv rule instead of goal
                     if isdiff
-                       then do                          
+                       then do
                           -- if the node is already present in the graph, do not insert it again. (This can be caused by substitutions applying and changing a goal.)
                           if not nodePresent
                              then do
@@ -329,7 +329,7 @@ insertAction i fa@(Fact _ ann _) = do
                 Just (UpK, viewTerm2 -> FMult ms) -> do
                 -- In the diff case, add mult rule instead of goal
                     if isdiff
-                       then do           
+                       then do
                           -- if the node is already present in the graph, do not insert it again. (This can be caused by substitutions applying and changing a goal.)
                           if not nodePresent
                              then do
@@ -341,7 +341,7 @@ insertAction i fa@(Fact _ ann _) = do
                                insertGoal goal False
                                markGoalAsSolved "exists" goal
                                return Changed
-                          
+
                        else do
                           insertGoal goal False
                           mapM_ requiresKU ms *> return Changed
@@ -349,7 +349,7 @@ insertAction i fa@(Fact _ ann _) = do
                 Just (UpK, viewTerm2 -> FUnion ms) -> do
                 -- In the diff case, add union (?) rule instead of goal
                     if isdiff
-                       then do                        
+                       then do
                           -- if the node is already present in the graph, do not insert it again. (This can be caused by substitutions applying and changing a goal.)
                           if not nodePresent
                              then do
@@ -361,7 +361,7 @@ insertAction i fa@(Fact _ ann _) = do
                                insertGoal goal False
                                markGoalAsSolved "exists" goal
                                return Changed
-                          
+
                        else do
                           insertGoal goal False
                           mapM_ requiresKU ms *> return Changed
@@ -376,11 +376,11 @@ insertAction i fa@(Fact _ ann _) = do
     requiresKU t = do
       j <- freshLVar "vk" LSortNode
       let faKU = kuFactAnn ann t
-      insertLess j i
+      insertLess (varTerm j) (varTerm i)
       void (insertAction j faKU)
 
 -- | Insert a 'Less' atom. @insertLess i j@ means that *i < j* is added.
-insertLess :: NodeId -> NodeId -> Reduction ()
+insertLess :: LNTerm -> LNTerm -> Reduction ()
 insertLess i j = modM sLessAtoms (S.insert (i, j))
 
 -- | Insert a 'Last' atom and ensure their uniqueness.
@@ -397,8 +397,8 @@ insertAtom :: LNAtom -> Reduction ChangeIndicator
 insertAtom ato = case ato of
     EqE x y       -> solveTermEqs SplitNow [Equal x y]
     Action i fa   -> insertAction (ltermNodeId' i) fa
-    Less i j      -> do insertLess (ltermNodeId' i) (ltermNodeId' j)
-                        return Unchanged
+    Less i j -> do insertLess i j
+                   return Unchanged
     Last i        -> insertLast (ltermNodeId' i)
     Syntactic _   -> return Unchanged
 
@@ -742,4 +742,3 @@ solveRuleConstraints (Just eqConstr) = do
     setM sEqStore =<< simp hnd (const (const False)) eqs
     noContradictoryEqStore
 solveRuleConstraints Nothing = return ()
-

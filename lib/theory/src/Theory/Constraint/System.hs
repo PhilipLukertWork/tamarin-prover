@@ -144,11 +144,14 @@ module Theory.Constraint.System (
 
   -- ** Temporal ordering
   , sLessAtoms
+  , getLessNodeId
 
   , rawLessRel
+  , rawLessRelNodeId
   , rawEdgeRel
 
   , alwaysBefore
+  , alwaysBeforeNodeId
   , isInTrace
 
   -- ** The last node
@@ -206,7 +209,7 @@ import           GHC.Generics                         (Generic)
 import           Data.Binary
 import qualified Data.ByteString.Char8                as BC
 import qualified Data.DAG.Simple                      as D
-import           Data.List                            (foldl', partition, intersect)
+import           Data.List                            (sortOn, delete, foldl', partition, intersect)
 import qualified Data.Map                             as M
 import           Data.Maybe                           (fromMaybe,mapMaybe)
 -- import           Data.Monoid                          (Monoid(..))
@@ -319,7 +322,7 @@ data GoalStatus = GoalStatus
 data System = System
     { _sNodes          :: M.Map NodeId RuleACInst
     , _sEdges          :: S.Set Edge
-    , _sLessAtoms      :: S.Set (NodeId, NodeId)
+    , _sLessAtoms      :: S.Set (LNTerm, LNTerm)
     , _sLastAtom       :: Maybe NodeId
     , _sEqStore        :: EqStore
     , _sFormulas       :: S.Set LNGuarded
@@ -679,7 +682,7 @@ safePartialAtomValuation ctxt sys =
     runMaude   = (`runReader` L.get pcMaudeHandle ctxt)
     before     = alwaysBefore sys
     lessRel    = rawLessRel sys
-    nodesAfter = \i -> filter (i /=) $ S.toList $ D.reachableSet [i] lessRel
+    nodesAfter = \i -> map ltermNodeId' $ filter (i /=) $ S.toList $ D.reachableSet [i] lessRel
 
     -- | 'True' iff there in every solution to the system the two node-ids are
     -- instantiated to a different index *in* the trace.
@@ -699,13 +702,26 @@ safePartialAtomValuation ctxt sys =
                     | all (not . runMaude . unifiableLNFacts fa) (L.get rActs ru) -> Just False
                   _                                                               -> Nothing
 
-          Less (ltermNodeId' -> i) (ltermNodeId' -> j)
+          Less i@(ltermNodeId -> Just vi) j@(ltermNodeId -> Just vj)
             | i == j || j `before` i             -> Just False
             | i `before` j                       -> Just True
-            | isLast sys i && isInTrace sys j    -> Just False
-            | isLast sys j && isInTrace sys i &&
-              nonUnifiableNodes i j              -> Just True
+            | isLast sys vi && isInTrace sys vj    -> Just False
+            | isLast sys vj && isInTrace sys vi &&
+              nonUnifiableNodes vi vj              -> Just True
             | otherwise                          -> Nothing
+
+          Less i@(ltermNatId -> Just _) j@(ltermNatId -> Just _)
+            | i == j || j `before` i             -> Just False
+            | i `before` j                       -> Just True
+            | otherwise                          -> Nothing
+
+          Less  (viewTerm -> FApp (AC NatPlus) ts) y
+               | elem y ts && elem fAppNatOne ts -> Just False  -- (an atom of the form x+ 1+ ...< x is False)
+
+          Less  _ x
+               | x == fAppNatOne -> Just False  -- (1 is currently the smallest integer)
+
+          Less _ _ -> Nothing
 
           EqE x y
             | x == y                                -> Just True
@@ -713,18 +729,18 @@ safePartialAtomValuation ctxt sys =
             | otherwise                             ->
                 case (,) <$> ltermNodeId x <*> ltermNodeId y of
                   Just (i, j)
-                    | i `before` j || j `before` i  -> Just False
+                    | x `before` y || y `before` x  -> Just False
                     | nonUnifiableNodes i j         -> Just False
                   _                                 -> Nothing
 
-          Last (ltermNodeId' -> i)
-            | isLast sys i                       -> Just True
+          Last i@(ltermNodeId' -> vi)
+            | isLast sys vi                       -> Just True
             | any (isInTrace sys) (nodesAfter i) -> Just False
             | otherwise ->
                 case L.get sLastAtom sys of
-                  Just j | nonUnifiableNodes i j -> Just False
+                  Just j | nonUnifiableNodes vi j -> Just False
                   _                              -> Nothing
-          
+
           Syntactic _                            -> Nothing
 
 -- | @impliedFormulas se imp@ returns the list of guarded formulas that are
@@ -1017,7 +1033,7 @@ saturateEdgesWithLessRelation sys = S.union (S.fromList $ lefts $ getEdgesFromLe
 -- | Returns the set of implicit edges of a system, which are implied by the nodes and the less relation
 --   If the edge references an open goal, the corresponding fact is returned.
 getEdgesFromLessRelation :: System -> [Either Edge (NodePrem, NodeId)]
-getEdgesFromLessRelation sys = map toEdge $ concat $ map (\x -> getAllMatchingConcs sys x $ getAllLessPreds sys $ fst x) (getOpenNodePrems sys)
+getEdgesFromLessRelation sys = map toEdge $ concat $ map (\x -> getAllMatchingConcs sys x $ getAllLessPredsNodeId sys $ fst x) (getOpenNodePrems sys)
   where
     toEdge (x, Left y)  = Left (Edge y x)
     toEdge (x, Right y) = Right (x, y)
@@ -1045,12 +1061,32 @@ getAllMatchingPrems sys fa (x:xs) = case (nodeRuleSafe x sys) of
 getAllMatchingPrems _   _     []  = []
 
 -- | Given a system and a node, gives the list of all nodes that have a "less" edge to this node
-getAllLessPreds :: System -> NodeId -> [NodeId]
+getAllLessPreds :: System -> LNTerm -> [LNTerm]
 getAllLessPreds sys nid = map fst $ filter (\(_, y) -> nid == y) (S.toList (L.get sLessAtoms sys))
 
 -- | Given a system and a node, gives the list of all nodes that have a "less" edge to this node
-getAllLessSucs :: System -> NodeId -> [NodeId]
+getAllLessSucs :: System -> LNTerm -> [LNTerm]
 getAllLessSucs sys nid = map snd $ filter (\(x, _) -> nid == x) (S.toList (L.get sLessAtoms sys))
+
+-- | Given a system and a node, gives the list of all nodes that have a "less" edge to this node
+getAllLessPredsNodeId :: System -> NodeId -> [NodeId]
+getAllLessPredsNodeId sys nid = map (ltermNodeId' . fst) $ filter (\(_, y) ->
+                                                   case ltermNodeId y of
+                                                    Just ny -> nid == ny
+                                                    Nothing -> False) (S.toList (L.get sLessAtoms sys))
+
+-- | Given a system and a node, gives the list of all nodes that have a "less" edge to this node
+getAllLessSucsNodeId :: System -> NodeId -> [NodeId]
+getAllLessSucsNodeId sys nid = map (ltermNodeId' . snd) $ filter (\(x, _) ->
+                                                 case ltermNodeId x of
+                                                   Just nx -> nid == nx
+                                                   Nothing -> False
+                                               ) (S.toList (L.get sLessAtoms sys))
+
+getLessNodeId :: System -> [(NodeId,NodeId)]
+getLessNodeId se = map (ltermNodeId' *** ltermNodeId') $ filter (\(x, y) -> case (ltermNodeId x, ltermNodeId y) of
+                                            (Just _, Just _) -> True
+                                            _ -> False)  $ S.toList $ L.get sLessAtoms se
 
 -- | Given a system, returns all node premises that have no incoming edge
 getOpenNodePrems :: System -> [NodePrem]
@@ -1076,7 +1112,7 @@ getTrivialFacts nodes sys = case (unsolvedTrivialGoals sys) of
     treatGoal a (Right var, fa) = premiseFacts (nodes, a) var fa
 
     premisesForKUAction :: LVar -> LNFact -> [NodePrem]
-    premisesForKUAction var fa = getAllMatchingPrems sys fa $ getAllLessSucs sys var
+    premisesForKUAction var fa = getAllMatchingPrems sys fa $ getAllLessSucsNodeId sys var
 
     premiseFacts :: HasFrees t => t -> LVar -> LNFact -> Maybe ([(LNFact, LVar, LVar)])
     premiseFacts av var fa = fmap concat $ sequence $ map (getAllEqData (renameAvoiding fa av)) (premisesForKUAction var fa)
@@ -1101,7 +1137,7 @@ checkIndependence sys (eith, fact) = not (D.cyclic (rawLessRel sys))
     variables = fromMaybe (error $ "checkIndependence: This fact " ++ show fact ++ " should be trivial! System: " ++ show sys) (isTrivialFact fact)
 
     identifyPremises :: LVar -> LNFact -> [NodePrem]
-    identifyPremises var' fact' = getAllMatchingPrems sys fact' (getAllLessSucs sys var')
+    identifyPremises var' fact' = getAllMatchingPrems sys fact' (getAllLessSucsNodeId sys var')
 
     checkIndependenceRec :: M.Map NodeId RuleACInst -> NodePrem -> M.Map NodeId RuleACInst
     checkIndependenceRec nodes (nid, _) = foldl checkIndependenceRec (M.delete nid nodes)
@@ -1228,12 +1264,41 @@ rawEdgeRel sys = map (nodeConcNode *** nodePremNode) $
 -- | @(from,to)@ is in @rawLessRel se@ iff we can prove that there is a path
 -- (possibly using the 'Less' relation) from @from@ to @to@ in @se@ without
 -- appealing to transitivity.
-rawLessRel :: System -> [(NodeId,NodeId)]
-rawLessRel se = S.toList (L.get sLessAtoms se) ++ rawEdgeRel se
+rawLessRel :: System -> [(LNTerm,LNTerm)]
+rawLessRel se = allLess ++ (map (varTerm *** varTerm) $ rawEdgeRel se) ++ natVarRels ++ natOrder natNoVar
+ where
+   allLess = S.toList (L.get sLessAtoms se)
+   chain [] _ = []
+   chain ts x | elem fAppNatOne ts = (FAPP (AC NatPlus) (delete fAppNatOne ts), FAPP (AC NatPlus) ts) : chain (delete fAppNatOne ts) x
+   chain ts x =  map (\t -> (t,x)) ts
+   natVarRels = foldl (\acc (x,_) -> -- Whenver a ts=1+x+ ... is a on the Lhs, we add x<ts-1<ts to the graph
+                      case viewTerm x of
+                         FApp (AC NatPlus) ts | elem fAppNatOne ts -> chain ts x
+                                                ++ acc
+                         _ -> acc
+                      ) [] allLess
+   isNat x = case viewTerm x of
+               FApp (AC NatPlus) ts | all (fAppNatOne==) ts -> [x]
+               _ | x == fAppNatOne -> [x]
+               _ -> []
+   valueNat x = case viewTerm x of
+               FApp (AC NatPlus) ts -> length ts
+               _ | x == fAppNatOne -> 1
+               _ -> 0
+   natNoVar = sortOn valueNat $ foldl (\acc (x,y) -> isNat x ++ isNat y ++ acc
+                      ) [] allLess
+
+   natOrder [] = []
+   natOrder [_] = []
+   natOrder (x:y:s) = [(x,y)] ++ natOrder (y:s)
+
+rawLessRelNodeId :: System -> [(NodeId, NodeId)]
+rawLessRelNodeId se = getLessNodeId se ++ rawEdgeRel se
+
 
 -- | Returns a predicate that is 'True' iff the first argument happens before
 -- the second argument in all models of the sequent.
-alwaysBefore :: System -> (NodeId -> NodeId -> Bool)
+alwaysBefore :: System -> (LNTerm -> LNTerm -> Bool)
 alwaysBefore sys =
     check -- lessRel is cached for partial applications
   where
@@ -1242,6 +1307,11 @@ alwaysBefore sys =
          -- speed-up check by first checking less-atoms
          ((i, j) `S.member` L.get sLessAtoms sys)
       || (j `S.member` D.reachableSet [i] lessRel)
+
+alwaysBeforeNodeId :: System -> (NodeId -> NodeId -> Bool)
+alwaysBeforeNodeId sys x y = alwaysBefore sys (varTerm x) (varTerm y)
+
+
 
 -- | 'True' iff the given node id is guaranteed to be instantiated to an
 -- index in the trace.
@@ -1357,7 +1427,7 @@ prettyGoals solved sys = vsep $ do
           ActionG i (kFactView -> Just (UpK, m))
               -- if there are KU-guards then all knowledge goals are useful
             | hasKUGuards             -> " (useful1)"
-            | currentlyDeducible i m  -> " (currently deducible)"
+            | currentlyDeducible (varTerm i) m  -> " (currently deducible)"
             | probablyConstructible m -> " (probably constructible)"
           _                           -> " (useful2)"
     return $ prettyGoal goal <-> lineComment_ ("nr: " ++ show nr ++ sourceRule ++ loopBreaker ++ show useful)
@@ -1397,7 +1467,7 @@ prettyGoals solved sys = vsep $ do
         -- if it is a derived message of 'ru' and the dependency does
         -- not make the graph cyclic.
         return $ m `elem` derivedMsgs &&
-                 not (j `S.member` D.reachableSet [i] existingDeps)
+                 not (varTerm j `S.member` D.reachableSet [i] existingDeps)
 
     toplevelTerms t@(viewTerm2 -> FPair t1 t2) =
         t : toplevelTerms t1 ++ toplevelTerms t2

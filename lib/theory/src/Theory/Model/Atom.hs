@@ -216,7 +216,7 @@ toAtom (Last t)      = Last t
 -- Pretty-Printing
 ------------------------------------------------------------------------------
 
-prettyProtoAtom :: (Show v, HighlightDocument d) => 
+prettyProtoAtom :: (Show v, HighlightDocument d) =>
                  (s v -> d)  --  Function for pretty printing syntactic sugar
               -> (v -> d)  --  Function for pretty printing terms / variables
               -> ProtoAtom s v -> d
@@ -229,7 +229,7 @@ prettyProtoAtom _ ppT (EqE l r) =
 prettyProtoAtom _ _ (Less u v) = text (show u) <-> opLess <-> text (show v)
 prettyProtoAtom _ _ (Last i)   = operator_ "last" <> parens (text (show i))
 
-prettyAtom :: (Show v, HighlightDocument d) => 
+prettyAtom :: (Show v, HighlightDocument d) =>
               (v -> d)  --  Function for pretty printing terms / variables
               -> Atom v -> d
 prettyAtom = prettyProtoAtom (const emptyDoc)

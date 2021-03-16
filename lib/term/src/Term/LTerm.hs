@@ -71,6 +71,8 @@ module Term.LTerm (
   , ltermVar'
   , ltermNodeId
   , ltermNodeId'
+  , ltermNatId
+  , ltermNatId'
   , bltermNodeId
   , bltermNodeId'
 
@@ -173,7 +175,7 @@ data LSort = LSortPub   -- ^ Arbitrary public names.
 --     |-- User
 --     |-- Pub
 --
-sortCompare :: LSort -> LSort -> Maybe Ordering  --TODO-MY take care that this is still correct; update the above figure 
+sortCompare :: LSort -> LSort -> Maybe Ordering  --TODO-MY take care that this is still correct; update the above figure
 sortCompare s1 s2 = case (s1, s2) of
     (a, b) | a == b          -> Just EQ
     -- Node is incomparable to all other sorts, invalid input
@@ -372,19 +374,19 @@ containsNoPrivateExcept funs t = case viewTerm t of
     FApp (NoEq (NoEqSym f _ Private _)) as -> (elem f funs) && (all (containsNoPrivateExcept funs) as)
     FApp _                      as -> all (containsNoPrivateExcept funs) as
 
-    
+
 -- | A term is *simple* iff there is an instance of this term that can be
 -- constructed from public names only. i.e., the term does not contain any
 -- fresh names, fresh variables, or private function symbols.
 isSimpleTerm :: LNTerm -> Bool  --NOT-TODO-MY should be fine like this
 isSimpleTerm t =
-    not (containsPrivate t) && 
+    not (containsPrivate t) &&
     (getAll . foldMap (All . (LSortFresh /=) . sortOfLit) $ t)
 
 -- | 'True' iff no instance of this term contains fresh names or private function symbols.
 neverContainsFreshPriv :: LNTerm -> Bool  --TODO-MY probably nothing to change but double-check the WF-condition that uses this
 neverContainsFreshPriv t =
-    not (containsPrivate t) && 
+    not (containsPrivate t) &&
     (getAll . foldMap (All . (`notElem` [LSortMsg, LSortFresh]) . sortOfLit) $ t)
 
 -- | Replaces all Fresh variables with constants using toConst.
@@ -454,6 +456,16 @@ ltermNodeId = ltermVar LSortNode
 -- | Extract a node-id variable from a term that must be a node-id variable.
 ltermNodeId' :: Show c => LTerm c -> LVar  --NOT-TODO-MY
 ltermNodeId' = ltermVar' LSortNode
+
+
+-- | Extract a natural variable from a term that may be a natural variable.
+ltermNatId :: LTerm c -> Maybe LVar  --NOT-TODO-MY
+ltermNatId = ltermVar LSortNat
+
+
+-- | Extract a natural variable from a term that must be a natural variable.
+ltermNatId' :: Show c => LTerm c -> LVar  --NOT-TODO-MY
+ltermNatId' = ltermVar' LSortNat
 
 
 -- BVar: Bound variables
@@ -631,7 +643,7 @@ renameIgnoring vars x = case boundsVarIdx x of
   where
     incVar shift (LVar n so i) = pure $ if elem (LVar n so i) vars then (LVar n so i) else (LVar n so (i+shift))
 
-    
+
 -- | @eqModuloFreshness t1 t2@ checks whether @t1@ is equal to @t2@ modulo
 -- renaming of indices of free variables. Note that the normal form is not
 -- unique with respect to AC symbols.
@@ -872,4 +884,3 @@ showLitName (Var (LVar v s i))       = "Var_" ++ sortSuffix s ++ "_" ++ body
         body | null v           = show i
              | i == 0           = v
              | otherwise        = show i ++ "_" ++ v
-

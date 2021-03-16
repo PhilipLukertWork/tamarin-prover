@@ -238,7 +238,7 @@ dotSystemLoose se =
         mapM_ dotNode     $ M.keys   $ get sNodes     se
         mapM_ dotEdge     $ S.toList $ get sEdges     se
         mapM_ dotChain    $            unsolvedChains se
-        mapM_ dotLess     $ S.toList $ get sLessAtoms se
+        mapM_ dotLess     $ getLessNodeId se
   where
     dotEdge  (Edge src tgt)  = do
         mayNid <- M.lookup (src,tgt) `liftM` getM dsSingles
@@ -347,7 +347,7 @@ dotNodeCompact boringStyle v = dotOnce dsNodes v $ do
     mkSimpleNode lbl attrs =
         liftDot $ D.node $ [("label", lbl),("shape","ellipse")] ++ attrs
 
-    mkNode  :: RuleACInst -> [(String, String)] -> Bool 
+    mkNode  :: RuleACInst -> [(String, String)] -> Bool
       -> ReaderT (System, NodeColorMap) (StateT DotState D.Dot)
          [(Maybe (Either PremIdx ConcIdx), D.NodeId)]
     mkNode ru attrs hasOutgoingEdge
@@ -412,7 +412,7 @@ dotSystemCompact boringStyle se =
         mapM_ (dotNodeCompact boringStyle . fst) $ unsolvedActionAtoms se
         F.mapM_ dotEdge                            $ get sEdges        se
         F.mapM_ dotChain                           $ unsolvedChains    se
-        F.mapM_ dotLess                            $ get sLessAtoms    se
+        F.mapM_ dotLess                            $ getLessNodeId se
   where
     missingNode shape label = liftDot $ D.node $ [("label", render label),("shape",shape)]
     dotPremC prem = dotOnce dsPrems prem $ missingNode "invtrapezium" $ prettyNodePrem prem
@@ -453,7 +453,10 @@ dropEntailedOrdConstraints se =
     modify sLessAtoms (S.filter (not . entailed)) se
   where
     edges               = rawEdgeRel se
-    entailed (from, to) = to `S.member` D.reachableSet [from] edges
+    entailed (from, to) =
+      case (ltermNodeId from, ltermNodeId to) of
+      (Just vFrom, Just vTo) -> vTo `S.member` D.reachableSet [vFrom] edges
+      _ -> True
 
 -- | Unsound compression of the sequent that drops fully connected learns and
 -- knows nodes.
@@ -493,12 +496,14 @@ tryHideNodeId v se = fromMaybe se $ do
               && notOccursIn (get sLastAtom)
               && notOccursIn (get sEdges)
 
-        return $ modify sLessAtoms ( (`S.union` S.fromList lNews)
+        return $ modify sLessAtoms (
+                                    ((`S.union` S.fromList lNews)
                                    . (`S.difference` S.fromList lIns)
                                    . (`S.difference` S.fromList lOuts)
                                    )
+                                   )
                $ modify sGoals (\m -> foldl' removeAction m kuActions)
-               $ se
+                se
       where
         kuActions            = [ x | x@(i,_,_) <- kuActionAtoms se, i == v ]
         eligibleTerm (_,_,m) =
@@ -506,8 +511,12 @@ tryHideNodeId v se = fromMaybe se $ do
 
         removeAction m (i, fa, _) = M.delete (ActionG i fa) m
 
-        lIns  = selectPart sLessAtoms ((v ==) . snd)
-        lOuts = selectPart sLessAtoms ((v ==) . fst)
+        lIns  =  filter (\(_,y) -> case ltermNodeId y of
+                            Just vy -> v == vy
+                            Nothing -> False) $ S.toList $ get sLessAtoms se
+        lOuts =  filter (\(x,_) -> case ltermNodeId x of
+                            Just vx -> v == vx
+                            Nothing -> False) $ S.toList $ get sLessAtoms se
         lNews = [ (i, j) | (i, _) <- lIns, (_, j) <- lOuts ]
 
     -- hide a rule, if it is not "too complicated"
@@ -545,4 +554,3 @@ tryHideNodeId v se = fromMaybe se $ do
 -- edge or less constraints associated.
 tryHideNodeId :: NodeId -> System -> System
 -}
-

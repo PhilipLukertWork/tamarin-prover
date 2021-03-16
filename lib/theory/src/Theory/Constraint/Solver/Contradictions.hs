@@ -53,8 +53,6 @@ import           Theory.Text.Pretty
 
 import           Term.Rewriting.Norm            (maybeNotNfSubterms, nf')
 
--- import           Debug.Trace
-
 ------------------------------------------------------------------------------
 -- Contradictions
 ------------------------------------------------------------------------------
@@ -197,7 +195,7 @@ nonInjectiveFactInstances ctxt se = do
     guard isCounterExample
     return (i, j, k) -- counter-example to unique fact instances
   where
-    less      = rawLessRel se
+    less      = rawLessRelNodeId se
     firstTerm = headMay . factTerms
 
 -- | The node-ids that must be instantiated to the trace, but are temporally
@@ -205,7 +203,7 @@ nonInjectiveFactInstances ctxt se = do
 nodesAfterLast :: System -> [(NodeId, NodeId)]
 nodesAfterLast sys = case L.get sLastAtom sys of
   Nothing -> []
-  Just i  -> do j <- S.toList $ D.reachableSet [i] $ rawLessRel sys
+  Just i  -> do j <- S.toList $ D.reachableSet [i] $ rawLessRelNodeId sys
                 guard (j /= i && isInTrace sys j)
                 return (i, j)
 
@@ -286,9 +284,9 @@ hasForbiddenChain sys =
         -- and whether we do not have an equality rule instance at the end
         is_not_equality <- pure $ not $ isIEqualityRule $ nodeRule (fst p) sys
         -- get all KU-facts with the same msg var
-        ku_start        <- pure $ filter (\x -> (fst x) == t_start) $ map (\(i, _, m) -> (m, i)) $ allKUActions sys 
+        ku_start        <- pure $ filter (\x -> (fst x) == t_start) $ map (\(i, _, m) -> (m, i)) $ allKUActions sys
         -- and check whether any of them happens before the KD-conclusion
-        ku_before       <- pure $ any (\(_, x) -> alwaysBefore sys x (fst c)) ku_start 
+        ku_before       <- pure $ any (\(_, x) -> alwaysBeforeNodeId sys x (fst c)) ku_start
         return (is_msg_var && is_not_equality && ku_before)
 
 -- Diffie-Hellman and Bilinear Pairing
@@ -319,7 +317,7 @@ hasForbiddenExp sys =
     allMsgVarsKnownEarlier i args =
         all (`elem` earlierMsgVars) (filter isMsgVar args)
       where earlierMsgVars = do (j, _, t) <- allKUActions sys
-                                guard $ isMsgVar t && alwaysBefore sys j i
+                                guard $ isMsgVar t && alwaysBeforeNodeId sys j i
                                 return t
 
 -- | 'True' if there is a @Pmult-down@ or @Em-down@ rule that

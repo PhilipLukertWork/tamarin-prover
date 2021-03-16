@@ -50,7 +50,6 @@ import           Theory.Constraint.System
 import           Theory.Model
 import           Theory.Text.Pretty
 
-
 -- | Apply CR-rules that don't result in case splitting until the constraint
 -- system does not change anymore.
 simplifySystem :: Reduction ()
@@ -66,7 +65,7 @@ simplifySystem = do
         -- Add all ordering constraint implied by CR-rule *N6*.
         exploitUniqueMsgOrder
         -- Remove equation split goals that do not exist anymore
-        removeSolvedSplitGoals    
+        removeSolvedSplitGoals
   where
     go n changes0
       -- We stop as soon as all simplification steps have been run without
@@ -151,7 +150,7 @@ exploitUniqueMsgOrder = do
     kdConcs   <- gets (M.fromList . map (\(i, _, m) -> (m, i)) . allKDConcs)
     kuActions <- gets (M.fromList . map (\(i, _, m) -> (m, i)) . allKUActions)
     -- We can add all elements where we have an intersection
-    F.mapM_ (uncurry insertLess) $ M.intersectionWith (,) kdConcs kuActions
+    F.mapM_ (uncurry insertLess . (varTerm *** varTerm)) $ M.intersectionWith (,) kdConcs kuActions
 
 -- | CR-rules *DG4*, *N5_u*, and *N5_d*: enforcing uniqueness of *Fresh* rule
 -- instances, *KU*-actions, and *KD*-conclusions.
@@ -224,7 +223,7 @@ enforceFreshAndKuNodeUniqueness =
         mergers ((_,(xKeep, iKeep)):remove) =
             mappend <$> solver         (map (Equal xKeep . fst . snd) remove)
                     <*> solveNodeIdEqs (map (Equal iKeep . snd . snd) remove)
-                    
+
 
 -- | CR-rules *DG2_1* and *DG3*: merge multiple incoming edges to all facts
 -- and multiple outgoing edges from linear facts.
@@ -330,7 +329,7 @@ partialAtomValuation ctxt sys =
     runMaude   = (`runReader` get pcMaudeHandle ctxt)
     before     = alwaysBefore sys
     lessRel    = rawLessRel sys
-    nodesAfter = \i -> filter (i /=) $ S.toList $ D.reachableSet [i] lessRel
+    nodesAfter = \i ->  map ltermNodeId' $  filter (i /=) $ S.toList $ D.reachableSet [i] lessRel
 
     -- | 'True' iff there in every solution to the system the two node-ids are
     -- instantiated to a different index *in* the trace.
@@ -351,13 +350,25 @@ partialAtomValuation ctxt sys =
                     | all (not . runMaude . unifiableLNFacts fa) (get rActs ru) -> Just False
                   _                                                             -> Nothing
 
-          Less (ltermNodeId' -> i) (ltermNodeId' -> j)
+          Less i@(ltermNodeId -> Just vi) j@(ltermNodeId -> Just vj)
             | i == j || j `before` i             -> Just False
             | i `before` j                       -> Just True
-            | isLast sys i && isInTrace sys j    -> Just False
-            | isLast sys j && isInTrace sys i &&
-              nonUnifiableNodes i j              -> Just True
+            | isLast sys vi && isInTrace sys vj    -> Just False
+            | isLast sys vj && isInTrace sys vi &&
+              nonUnifiableNodes vi vj              -> Just True
             | otherwise                          -> Nothing
+
+          Less i@(ltermNatId -> Just _) j@(ltermNatId -> Just _)
+            | i == j || j `before` i             -> Just False
+            | i `before` j                       -> Just True
+            | otherwise                          -> Nothing
+
+          Less (viewTerm -> FApp (AC NatPlus) ts) y
+               |  elem y ts && elem fAppNatOne ts -> Just False  -- (an atom of the form x+ 1+ ...< x is False)
+          Less  _ x
+               | x == fAppNatOne -> Just False  -- (1 is currently the smallest integer)
+
+          Less _ _ -> Nothing
 
           EqE x y
             | x == y                                -> Just True
@@ -365,16 +376,16 @@ partialAtomValuation ctxt sys =
             | otherwise                             ->
                 case (,) <$> ltermNodeId x <*> ltermNodeId y of
                   Just (i, j)
-                    | i `before` j || j `before` i  -> Just False
+                    | x `before` y || y `before` x  -> Just False
                     | nonUnifiableNodes i j         -> Just False
                   _                                 -> Nothing
 
-          Last (ltermNodeId' -> i)
-            | isLast sys i                       -> Just True
+          Last i@(ltermNodeId' -> vi)
+            | isLast sys vi                       -> Just True
             | any (isInTrace sys) (nodesAfter i) -> Just False
             | otherwise ->
                 case get sLastAtom sys of
-                  Just j | nonUnifiableNodes i j -> Just False
+                  Just j | nonUnifiableNodes vi j -> Just False
                   _                              -> Nothing
 
           Syntactic _                            -> Nothing
@@ -394,4 +405,3 @@ insertImpliedFormulas = do
              implied `S.notMember` get sSolvedFormulas sys )
           then return (insertFormula implied)
           else []
-

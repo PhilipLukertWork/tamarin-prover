@@ -72,7 +72,7 @@ data Edge = Edge {
   deriving (Show, Ord, Eq, Data, Typeable, Generic, NFData, Binary)
 
 -- | A *⋖* constraint between 'NodeId's.
-type Less = (NodeId, NodeId)
+type Less = (LNTerm, LNTerm)
 
 -- Instances
 ------------
@@ -190,7 +190,7 @@ prettyEdge (Edge c p) =
 
 -- | Pretty print a less-atom as @src < tgt@.
 prettyLess :: HighlightDocument d => Less -> d
-prettyLess (i, j) = prettyNAtom $ Less (varTerm i) (varTerm j)
+prettyLess (i, j) = prettyNAtom $ Less (i) (j)
 
 -- | Pretty print a goal.
 prettyGoal :: HighlightDocument d => Goal -> d
@@ -207,4 +207,3 @@ prettyGoal (DisjG (Disj gfs)) = fsep $
     -- punctuate (operator_ " |") (map (nest 1 . parens . prettyGuarded) gfs)
 prettyGoal (SplitG x) =
     text "splitEqs" <> parens (text $ show (unSplitId x))
-
