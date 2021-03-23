@@ -623,6 +623,7 @@ blatom = (fmap (fmapTerm (fmap Free))) <$> asum
   , Syntactic . Pred <$> try (fact llit)                             <?> "predicate atom"
   , Less        <$> try (nodevarTerm <* opLess)    <*> nodevarTerm   <?> "less atom"
   , EqE         <$> try (msetterm False llit <* opEqual) <*> msetterm False llit <?> "term equality"
+  , EqE         <$> try (msetterm False llit <* opSubterm) <*> msetterm False llit <?> "subterm predicate"
   , EqE         <$>     (nodevarTerm  <* opEqual)  <*> nodevarTerm   <?> "node equality"
   ]
   where

@@ -146,14 +146,19 @@ module Theory.Constraint.System (
   , sLessAtoms
 
   , rawLessRel
+  , rawSubtermRel
   , rawEdgeRel
 
   , alwaysBefore
+  , hasSubtermCycle
   , isInTrace
 
   -- ** The last node
   , sLastAtom
   , isLast
+
+  -- ** Subterms
+  , sSubtermAtoms
 
   -- ** Equations
   , module Theory.Tools.EquationStore
@@ -320,6 +325,7 @@ data System = System
     { _sNodes          :: M.Map NodeId RuleACInst
     , _sEdges          :: S.Set Edge
     , _sLessAtoms      :: S.Set (NodeId, NodeId)
+    , _sSubtermAtoms   :: S.Set (LNTerm, LNTerm)
     , _sLastAtom       :: Maybe NodeId
     , _sEqStore        :: EqStore
     , _sFormulas       :: S.Set LNGuarded
@@ -450,7 +456,7 @@ $(mkLabels [''DiffSystem])
 -- | The empty constraint system, which is logically equivalent to true.
 emptySystem :: SourceKind -> Bool -> System
 emptySystem d isdiff = System
-    M.empty S.empty S.empty Nothing emptyEqStore
+    M.empty S.empty S.empty S.empty Nothing emptyEqStore
     S.empty S.empty S.empty
     M.empty 0 d isdiff
 
@@ -717,6 +723,8 @@ safePartialAtomValuation ctxt sys =
                     | nonUnifiableNodes i j         -> Just False
                   _                                 -> Nothing
 
+          Subterm _ _ -> Nothing  --TODO-SUBTERM (can be optimized but should work like this)
+
           Last (ltermNodeId' -> i)
             | isLast sys i                       -> Just True
             | any (isInTrace sys) (nodesAfter i) -> Just False
@@ -743,7 +751,7 @@ impliedFormulas hnd sys gf0 = res
     gf = skolemizeGuarded gf0
 
     prepare (Action i fa) = Left  (GAction i fa)
-    prepare (EqE s t)     = Left  (GEqE s t)
+    prepare (EqE s t)     = Left  (GEqE s t)  --TODO-SUBTERM
     prepare ato           = Right (fmap (fmapTerm (fmap Free)) ato)
 
     sysActions = do (i, fa) <- allActions sys
@@ -783,7 +791,7 @@ impliedFormulasAndSystems hnd sys gf = res
       _ -> []
 
     prepare (Action i fa) = Left  (GAction i fa)
-    prepare (EqE s t)     = Left  (GEqE s t)
+    prepare (EqE s t)     = Left  (GEqE s t)  --TODO-SUBTERM
     prepare ato           = Right (fmap (fmapTerm (fmap Free)) ato)
 
     sysActions = allActions sys
@@ -1231,6 +1239,12 @@ rawEdgeRel sys = map (nodeConcNode *** nodePremNode) $
 rawLessRel :: System -> [(NodeId,NodeId)]
 rawLessRel se = S.toList (L.get sLessAtoms se) ++ rawEdgeRel se
 
+-- | @(from,to)@ is in @rawLessRel se@ iff we can prove that there is a path
+-- (possibly using the 'Less' relation) from @from@ to @to@ in @se@ without
+-- appealing to transitivity.
+rawSubtermRel :: System -> [(LNTerm,LNTerm)]
+rawSubtermRel se = S.toList (L.get sSubtermAtoms se)
+
 -- | Returns a predicate that is 'True' iff the first argument happens before
 -- the second argument in all models of the sequent.
 alwaysBefore :: System -> (NodeId -> NodeId -> Bool)
@@ -1242,6 +1256,31 @@ alwaysBefore sys =
          -- speed-up check by first checking less-atoms
          ((i, j) `S.member` L.get sLessAtoms sys)
       || (j `S.member` D.reachableSet [i] lessRel)
+
+-- | Computes whether there is a cycle @t0 ⊂ x0, ..., tn ⊂ xn@ in @dag@ such that @xi@ are variables and
+-- @xi@ is syntactically in @t_i+1@ and not below a cancellation operator
+hasSubtermCycle :: [(LNTerm, LNTerm)] -> Bool
+hasSubtermCycle dag = maybe True (const False) $ foldM visitForest S.empty dag
+  where
+    -- adapted from cyclic in Simple.hs but using tuples of LNTerm instead of LNTerm
+    visitForest :: S.Set (LNTerm, LNTerm) -> (LNTerm, LNTerm) -> Maybe (S.Set (LNTerm, LNTerm))
+    visitForest visited x
+      | x `S.member` visited = return visited
+      | otherwise            = findLoop S.empty visited x
+
+    findLoop :: S.Set (LNTerm, LNTerm) -> S.Set (LNTerm, LNTerm) -> (LNTerm, LNTerm) -> Maybe (S.Set (LNTerm, LNTerm))
+    findLoop parents visited x
+      | x `S.member` parents = mzero
+      | x `S.member` visited = return visited
+      | otherwise            =
+          S.insert x <$> foldM (findLoop parents') visited next
+      where
+        containsXVar :: LNTerm -> Bool    -- Theory.Constraint.System
+        containsXVar term = case getVar (snd x) of
+          Just v -> (Var v) `elem` term  --TODO-SUBTERM: ignore variables below cancellation operators
+          Nothing -> False  -- snd x is not a var -> next = ∅
+        next     = [ (e,e') | (e,e') <- dag, containsXVar e]
+        parents' = S.insert x parents
 
 -- | 'True' iff the given node id is guaranteed to be instantiated to an
 -- index in the trace.
@@ -1282,6 +1321,7 @@ prettyNonGraphSystem se = vsep $ map combine -- text $ show se
   [ ("last",            maybe (text "none") prettyNodeId $ L.get sLastAtom se)
   , ("formulas",        vsep $ map prettyGuarded {-(text . show)-} $ S.toList $ L.get sFormulas se)
   , ("equations",       prettyEqStore $ L.get sEqStore se)
+  , ("subterms",        fsepList prettySubterm $ S.toList $ L.get sSubtermAtoms se)
   , ("lemmas",          vsep $ map prettyGuarded $ S.toList $ L.get sLemmas se)
   , ("allowed cases",   text $ show $ L.get sSourceKind se)
   , ("solved formulas", vsep $ map prettyGuarded $ S.toList $ L.get sSolvedFormulas se)
@@ -1335,6 +1375,10 @@ prettyNonGraphSystemDiff ctxt se = vsep $ map combine
 -- --       evalFms <- Just $ doRestrictionsHold (if side == LHS then L.get dpcPCLeft ctxt else L.get dpcPCRight ctxt) system formulas
 -- --       strings <- Just $ (concat $ map (\x -> (show x) ++ " ") evalFms) ++ (concat $ map (\x -> (show x) ++ " ") formulas)
 --       return $ concat $ map snd siderestrictions
+
+-- | Pretty print a less-atom as @src < tgt@.
+prettySubterm :: HighlightDocument d => (LNTerm, LNTerm) -> d
+prettySubterm (i, j) = prettyNAtom $ Subterm i j
 
 -- | Pretty print the proof type.
 prettyProofType :: HighlightDocument d => Maybe DiffProofType -> d
@@ -1422,13 +1466,13 @@ instance Apply SourceKind where
     apply = const id
 
 instance Apply System where
-    apply subst (System a b c d e f g h i j k l) =
+    apply subst (System a b c d e f g h i j k l m) =
         System (apply subst a)
         -- we do not apply substitutions to node variables, so we do not apply them to the edges either
         b
         (apply subst c) (apply subst d)
         (apply subst e) (apply subst f) (apply subst g) (apply subst h)
-        i j (apply subst k) (apply subst l)
+        (apply subst i) j k (apply subst l) (apply subst m)
 
 instance HasFrees SourceKind where
     foldFrees = const mempty
@@ -1441,7 +1485,7 @@ instance HasFrees GoalStatus where
     mapFrees  = const pure
 
 instance HasFrees System where
-    foldFrees fun (System a b c d e f g h i j k l) =
+    foldFrees fun (System a b c d e f g h i j k l m) =
         foldFrees fun a `mappend`
         foldFrees fun b `mappend`
         foldFrees fun c `mappend`
@@ -1453,9 +1497,10 @@ instance HasFrees System where
         foldFrees fun i `mappend`
         foldFrees fun j `mappend`
         foldFrees fun k `mappend`
-        foldFrees fun l
+        foldFrees fun l `mappend`
+        foldFrees fun m
 
-    foldFreesOcc fun ctx (System a _b _c _d _e _f _g _h _i _j _k _l) =
+    foldFreesOcc fun ctx (System a _b _c _d _e _f _g _h _i _j _k _l _m) =
         foldFreesOcc fun ("a":ctx') a {- `mappend`
         foldFreesCtx fun ("b":ctx') b `mappend`
         foldFreesCtx fun ("c":ctx') c `mappend`
@@ -1469,7 +1514,7 @@ instance HasFrees System where
         foldFreesCtx fun ("k":ctx') k -}
       where ctx' = "system":ctx
 
-    mapFrees fun (System a b c d e f g h i j k l) =
+    mapFrees fun (System a b c d e f g h i j k l m) =
         System <$> mapFrees fun a
                <*> mapFrees fun b
                <*> mapFrees fun c
@@ -1482,6 +1527,7 @@ instance HasFrees System where
                <*> mapFrees fun j
                <*> mapFrees fun k
                <*> mapFrees fun l
+               <*> mapFrees fun m
 
 
 -- Special comparison functions to ignore new var instantiations
@@ -1505,11 +1551,11 @@ compareNodesUpToNewVars n1 n2 = compareListsUpToNewVars (M.toAscList n1) (M.toAs
 compareSystemsUpToNewVars :: System -> System -> Ordering
 -- when we have trace systems, we can ignore new variable instantiations
 compareSystemsUpToNewVars
-   (System a1 b1 c1 d1 e1 f1 g1 h1 i1 j1 k1 False)
-   (System a2 b2 c2 d2 e2 f2 g2 h2 i2 j2 k2 False)
+   (System a1 b1 c1 d1 e1 f1 g1 h1 i1 j1 k1 l1 False)
+   (System a2 b2 c2 d2 e2 f2 g2 h2 i2 j2 k2 l2 False)
        = if compareNodes == EQ then
-            compare (System M.empty b1 c1 d1 e1 f1 g1 h1 i1 j1 k1 False)
-                (System M.empty b2 c2 d2 e2 f2 g2 h2 i2 j2 k2 False)
+            compare (System M.empty b1 c1 d1 e1 f1 g1 h1 i1 j1 k1 l1 False)
+                (System M.empty b2 c2 d2 e2 f2 g2 h2 i2 j2 k2 l2 False)
          else
             compareNodes
         where

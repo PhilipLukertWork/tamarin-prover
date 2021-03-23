@@ -368,6 +368,8 @@ partialAtomValuation ctxt sys =
                     | i `before` j || j `before` i  -> Just False
                     | nonUnifiableNodes i j         -> Just False
                   _                                 -> Nothing
+                  
+          Subterm _ _ -> Nothing  --TODO-SUBTERM (can be optimized but should work like this)
 
           Last (ltermNodeId' -> i)
             | isLast sys i                       -> Just True

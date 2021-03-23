@@ -62,6 +62,7 @@ import           Term.Rewriting.Norm            (maybeNotNfSubterms, nf')
 -- | Reasons why a constraint 'System' can be contradictory.
 data Contradiction =
     Cyclic                         -- ^ The paths are cyclic.
+  | SubtermCyclic                  -- ^ The subterm predicates form a cycle
   | NonNormalTerms                 -- ^ Has terms that are not in normal form.
   -- | NonLastNode                    -- ^ Has a non-silent node after the last node.
   | ForbiddenExp                   -- ^ Forbidden Exp-down rule instance
@@ -90,6 +91,8 @@ contradictions :: ProofContext -> System -> [Contradiction]
 contradictions ctxt sys = F.asum
     -- CR-rule **
     [ guard (D.cyclic $ rawLessRel sys)             *> pure Cyclic
+    -- CR-rule *S_Subterm-Chain-Fail*
+    , guard (hasSubtermCycle $ rawSubtermRel sys)   *> pure SubtermCyclic
     -- CR-rule *N1*
     , guard (hasNonNormalTerms sig sys)             *> pure NonNormalTerms  --TODO-UNCERTAIN: removed iterated functions
     -- FIXME: add CR-rule
@@ -428,6 +431,7 @@ isForbiddenDEMapOrder sys (i, ruDEMap) = fromMaybe False $ do
 prettyContradiction :: Document d => Contradiction -> d
 prettyContradiction contra = case contra of
     Cyclic                       -> text "cyclic"
+    SubtermCyclic                -> text "subterm cyclic"
     IncompatibleEqs              -> text "incompatible equalities"
     NonNormalTerms               -> text "non-normal terms"
     ForbiddenExp                 -> text "non-normal exponentiation rule instance"

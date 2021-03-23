@@ -38,6 +38,7 @@ module Theory.Constraint.Solver.Reduction (
   , insertChain
   , insertAction
   , insertLess
+  , insertSubterm
   , insertFormula
   , reducibleFormula
 
@@ -51,6 +52,7 @@ module Theory.Constraint.Solver.Reduction (
   , substEdges
   , substLastAtom
   , substLessAtoms
+  , substSubtermAtoms
   , substFormulas
   , substSolvedFormulas
 
@@ -383,6 +385,10 @@ insertAction i fa@(Fact _ ann _) = do
 insertLess :: NodeId -> NodeId -> Reduction ()
 insertLess i j = modM sLessAtoms (S.insert (i, j))
 
+-- | Insert a 'Subterm' atom. @insertSubterm i j@ means that *i ⊂ j* is added.
+insertSubterm :: LNTerm -> LNTerm -> Reduction ()
+insertSubterm i j = modM sSubtermAtoms (S.insert (i, j))
+
 -- | Insert a 'Last' atom and ensure their uniqueness.
 insertLast :: NodeId -> Reduction ChangeIndicator
 insertLast i = do
@@ -396,9 +402,10 @@ insertLast i = do
 insertAtom :: LNAtom -> Reduction ChangeIndicator
 insertAtom ato = case ato of
     EqE x y       -> solveTermEqs SplitNow [Equal x y]
+    Subterm x y   -> insertSubterm x y >> return Changed
     Action i fa   -> insertAction (ltermNodeId' i) fa
     Less i j      -> do insertLess (ltermNodeId' i) (ltermNodeId' j)
-                        return Unchanged
+                        return Unchanged  --TODO why is this Unchanged?
     Last i        -> insertLast (ltermNodeId' i)
     Syntactic _   -> return Unchanged
 
@@ -445,7 +452,7 @@ insertFormula = do
           -- CR-rule *S_{¬,⋖}*
           GGuarded All [] [Less i j] gf  | gf == gfalse -> do
               markAsSolved
-              insert False (gdisj [GAto (EqE i j), GAto (Less j i)])
+              insert False (gdisj [GAto (EqE i j), GAto (Less j i)])  --TODO-SUBTERM add a special behaviour to subterms?
 
           -- CR-rule: FIXME add this rule to paper
           GGuarded All [] [EqE i@(bltermNodeId -> Just _)
@@ -547,6 +554,7 @@ substSystem = do
     substEdges
     substLastAtom
     substLessAtoms
+    substSubtermAtoms
     substFormulas
     substSolvedFormulas
     substLemmas
@@ -555,11 +563,12 @@ substSystem = do
     return (c1 <> c2)
 
 -- no invariants to maintain here
-substEdges, substLessAtoms, substLastAtom, substFormulas,
+substEdges, substLessAtoms, substSubtermAtoms, substLastAtom, substFormulas,
   substSolvedFormulas, substLemmas, substNextGoalNr :: Reduction ()
 
 substEdges          = substPart sEdges
 substLessAtoms      = substPart sLessAtoms
+substSubtermAtoms   = substPart sSubtermAtoms
 substLastAtom       = substPart sLastAtom
 substFormulas       = substPart sFormulas
 substSolvedFormulas = substPart sSolvedFormulas
