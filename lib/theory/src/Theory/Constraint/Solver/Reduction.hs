@@ -38,7 +38,6 @@ module Theory.Constraint.Solver.Reduction (
   , insertChain
   , insertAction
   , insertLess
-  , insertSubterm
   , insertFormula
   , reducibleFormula
 
@@ -52,7 +51,6 @@ module Theory.Constraint.Solver.Reduction (
   , substEdges
   , substLastAtom
   , substLessAtoms
-  , substSubtermAtoms
   , substFormulas
   , substSolvedFormulas
 
@@ -385,10 +383,6 @@ insertAction i fa@(Fact _ ann _) = do
 insertLess :: NodeId -> NodeId -> Reduction ()
 insertLess i j = modM sLessAtoms (S.insert (i, j))
 
--- | Insert a 'Subterm' atom. @insertSubterm i j@ means that *i ⊂ j* is added.
-insertSubterm :: LNTerm -> LNTerm -> Reduction ()
-insertSubterm i j = modM sSubtermAtoms (S.insert (i, j))
-
 -- | Insert a 'Last' atom and ensure their uniqueness.
 insertLast :: NodeId -> Reduction ChangeIndicator
 insertLast i = do
@@ -402,7 +396,7 @@ insertLast i = do
 insertAtom :: LNAtom -> Reduction ChangeIndicator
 insertAtom ato = case ato of
     EqE x y       -> solveTermEqs SplitNow [Equal x y]
-    Subterm x y   -> insertSubterm x y >> return Changed
+    Subterm x y   -> solveSubtermEq SplitLater (x, y)
     Action i fa   -> insertAction (ltermNodeId' i) fa
     Less i j      -> do insertLess (ltermNodeId' i) (ltermNodeId' j)
                         return Unchanged  --TODO why is this Unchanged?
@@ -554,7 +548,6 @@ substSystem = do
     substEdges
     substLastAtom
     substLessAtoms
-    substSubtermAtoms
     substFormulas
     substSolvedFormulas
     substLemmas
@@ -563,12 +556,11 @@ substSystem = do
     return (c1 <> c2)
 
 -- no invariants to maintain here
-substEdges, substLessAtoms, substSubtermAtoms, substLastAtom, substFormulas,
+substEdges, substLessAtoms, substLastAtom, substFormulas,
   substSolvedFormulas, substLemmas, substNextGoalNr :: Reduction ()
 
 substEdges          = substPart sEdges
 substLessAtoms      = substPart sLessAtoms
-substSubtermAtoms   = substPart sSubtermAtoms
 substLastAtom       = substPart sLastAtom
 substFormulas       = substPart sFormulas
 substSolvedFormulas = substPart sSolvedFormulas
@@ -655,7 +647,7 @@ conjoinSystem sys = do
     _ <- (setNodes . (M.toList (get sNodes sys) ++) . M.toList) =<< getM sNodes
     -- conjoin equation store
     eqs <- getM sEqStore
-    let (eqs',splitIds) = (mapAccumL addDisj eqs (map snd . getConj $ get sConjDisjEqs sys))
+    let (eqs',splitIds) = (mapAccumL addEntries eqs (map snd . getConj $ get sConjDisjEqs sys))
     setM sEqStore eqs'
     -- add split-goals for all disjunctions of sys
     mapM_  (`insertGoal` False) $ SplitG <$> splitIds
@@ -708,6 +700,20 @@ solveTermEqs splitStrat eqs0 =
                   _                        -> return eqs2
         noContradictoryEqStore
         return Changed
+
+solveSubtermEq :: SplitStrategy -> (LNTerm, LNTerm) -> Reduction ChangeIndicator
+solveSubtermEq splitStrat st = do
+    hnd <- getMaudeHandle
+    origStore <- getM sEqStore
+    (store, maySplitId) <- addSubterm hnd st origStore
+    setM sEqStore =<< case (maySplitId, splitStrat) of
+       (Just splitId, SplitNow) -> disjunctionOfList $ fromJustNote "solveSubtermEq" $ performSplit store splitId
+       (Just splitId, SplitLater) -> insertGoal (SplitG splitId) False >> return store
+       _ -> return origStore  -- nothing changes
+    noContradictoryEqStore
+    return $ case maySplitId of
+       Nothing -> Unchanged  -- origStore was inserted
+       _       -> Changed
 
 -- | Add a list of equalities in substitution form to the equation store
 solveSubstEqs :: SplitStrategy -> LNSubst -> Reduction ChangeIndicator
