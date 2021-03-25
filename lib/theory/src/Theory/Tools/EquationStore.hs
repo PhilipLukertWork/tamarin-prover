@@ -63,7 +63,6 @@ import           Control.Monad.Fresh
 import           Control.Monad.Bind
 import           Control.Monad.Reader
 import           Extension.Prelude
-import           Utils.Misc
 
 import           Debug.Trace.Ignore
 
@@ -207,6 +206,13 @@ falseDisj = S.empty
 splits :: EqStore -> [SplitId]
 splits eqs = map fst $ nub $ sortOn snd
     [ (idx, S.size conj) | (idx, conj) <- getConj $ L.get eqsConj eqs ]
+    
+-- | Returns the list of @SplitId@s where the set of storeEntries is a singleton and @SubtermE@
+-- This is used for finding new Split Goals that arise if these singletons are expanded 
+onlySingleSubtermSplits :: EqStore -> [SplitId]
+onlySingleSubtermSplits eqs = [ idx | (idx, [SubtermE _]) <- map (second S.toList) conjs]
+  where
+    conjs = getConj $ L.get eqsConj eqs
 
 -- | Returns 'True' if the 'SplitId' is valid.
 splitExists :: EqStore -> SplitId -> Bool
@@ -252,18 +258,18 @@ performSplit eqStore idx =
         fst $ addEntries (set eqsConj (Conj (before ++ after)) eqStore) (S.singleton subst)
 
 addEqs :: MonadFresh m
-       => MaudeHandle -> [Equal LNTerm] -> EqStore -> m (EqStore, Maybe SplitId)
+       => MaudeHandle -> [Equal LNTerm] -> EqStore -> m (EqStore, Maybe SplitId, [SplitId])
 addEqs hnd eqs0 eqStore =
     case unifyLNTermFactored eqs `runReader` hnd of
         (_, []) ->
-            return (set eqsConj falseEqConstrConj eqStore, Nothing)
+            return (set eqsConj falseEqConstrConj eqStore, Nothing, [])
         (subst, [substFresh]) | substFresh == emptySubstVFresh -> do
-            newStore <- applyEqStore hnd subst eqStore
-            return (newStore, Nothing)
+            (newStore, ids) <- applyEqStore hnd subst eqStore
+            return (newStore, Nothing, ids)
         (subst, substs) -> do
-            newStore <- applyEqStore hnd subst eqStore
+            (newStore, ids) <- applyEqStore hnd subst eqStore
             let (eqStore', sid) = addDisj newStore (S.fromList substs)
-            return (eqStore', Just sid)
+            return (eqStore', Just sid, ids)
             {-
             case splitStrat of
                 SplitLater ->
@@ -337,15 +343,19 @@ recurseSubterms hnd = recurse
     getUnifiers eq = unifyLNTerm [eq] `runReader` hnd
 
 -- | Apply a substitution to an equation store and bring resulting equations into
---   normal form again by using unification.
-applyEqStore :: MonadFresh m => MaudeHandle -> LNSubst -> EqStore -> m EqStore
+--   normal form again by using unification. The application can "reactivate" subterm constraints.
+--   If this happens, they are expanded again (by recurseSubterms) which might create new splitGoals.
+--   These splitGoals are then returned in a list (along with the changed EqStore)
+applyEqStore :: MonadFresh m => MaudeHandle -> LNSubst -> EqStore -> m (EqStore, [SplitId])
 applyEqStore hnd asubst eqStore
     | dom asubst `intersect` varsRange asubst /= [] || trace (show ("applyEqStore", asubst, eqStore)) False
     = error $ "applyEqStore: dom and vrange not disjoint for `"++show asubst++"'"
     | otherwise
     = do 
       newConjs <- mapM modifyOneConj $ L.get eqsConj eqStore
-      return $ EqStore newsubst newConjs $ L.get eqsNextSplitId eqStore
+      let newEqStore = EqStore newsubst newConjs $ L.get eqsNextSplitId eqStore
+      let splitGoals = filter (\x -> notElem x $ onlySingleSubtermSplits eqStore) $ onlySingleSubtermSplits newEqStore
+      return $ (newEqStore, splitGoals)  --TODO-SUBTERM: add right split ids (expanded singleton-subterms)
     -- FIXME maybe this is more performant with modify and second instead of making a new EqStore
     -- old code (without fresh monad):
     -- modify eqsConj (fmap (second (S.fromList . concatMap applyBound . S.toList))) $
@@ -427,7 +437,7 @@ simpDisjunction :: MonadFresh m
                 -> Disj LNSubstVFresh
                 -> m (LNSubst, Maybe [LNSubstVFresh])
 simpDisjunction hnd isContr disj0 = do
-    eqStore' <- simp hnd isContr eqStore
+    (eqStore', _) <- simp hnd isContr eqStore  -- there cannot be a new split goal in simp if there are no subterms
     return (L.get eqsSubst eqStore', wrap $ L.get eqsConj eqStore')
   where
     eqStore = fst $ addDisj emptyEqStore (S.fromList $ getDisj $ disj0)
@@ -442,31 +452,46 @@ simpDisjunction hnd isContr disj0 = do
 ----------------------------------------------------------------------
 
 -- | @simp eqStore@ simplifies the equation store.
-simp :: MonadFresh m => MaudeHandle -> (LNSubst -> LNSubstVFresh -> Bool) -> EqStore -> m EqStore
-simp hnd isContr eqStore =
-    execStateT (whileTrue (simp1 hnd isContr))
-               (trace (show ("eqStore", eqStore)) eqStore)
+simp :: MonadFresh m => MaudeHandle -> (LNSubst -> LNSubstVFresh -> Bool) -> EqStore -> m (EqStore, [SplitId])
+simp hnd isContr eqStore = liftM swap $ runStateT (loopSimp1 []) 
+               (trace (show ("eqStore", eqStore)) (eqStore))
+  where
+    loopSimp1 oldSplits = do
+      newMaysplits <- simp1 hnd isContr
+      case newMaysplits of
+        Nothing -> return $ oldSplits
+        Just newSplits -> loopSimp1 $ oldSplits ++ newSplits   
+        
 
 
 -- | @simp1@ tries to execute one simplification step
---   for the equation store. It returns @True@ if
---   the equation store was modified.
-simp1 :: MonadFresh m => MaudeHandle -> (LNSubst -> LNSubstVFresh -> Bool) -> StateT EqStore m Bool
+--   for the equation store. It returns @Nothing@ if
+--   the equation store was not modified.
+--   If it returns @Just list@ it was modified and new split goals arose at the split id's in the list 
+simp1 :: MonadFresh m => MaudeHandle -> (LNSubst -> LNSubstVFresh -> Bool) -> StateT EqStore m (Maybe [SplitId])
 simp1 hnd isContr = do
     eqs <- MS.get
     if eqsIsFalse eqs
-        then return False
+        then return Nothing
         else do
           b1 <- simpMinimize (isContr (L.get eqsSubst eqs))
           b2 <- simpRemoveRenamings
           b3 <- simpEmptyDisj
-          b4 <- foreachDisj hnd simpSingleton
-          b5 <- foreachDisj hnd simpAbstractSortedVar
-          b6 <- foreachDisj hnd simpIdentify
-          b7 <- foreachDisj hnd simpAbstractFun
-          b8 <- foreachDisj hnd simpAbstractName
-          (trace (show ("simp:", [b1, b2, b3, b4, b5, b6, b7, b8]))) $
-              return $ (or [b1, b2, b3, b4, b5, b6, b7, b8])
+          let ids3 = if or [b1, b2, b3] then Just [] else Nothing
+          ids4 <- acc ids3 $ foreachDisj hnd simpSingleton
+          ids5 <- acc ids4 $ foreachDisj hnd simpAbstractSortedVar
+          ids6 <- acc ids5 $ foreachDisj hnd simpIdentify
+          ids7 <- acc ids6 $ foreachDisj hnd simpAbstractFun
+          ids8 <- acc ids7 $ foreachDisj hnd simpAbstractName
+          (trace (show ("simp:", [b1, b2, b3]))) $
+              return $ ids8
+        where
+          acc :: MonadFresh m => Maybe [SplitId] -> m (Maybe [SplitId]) -> m (Maybe [SplitId])
+          acc oldsplit mMaysplit = do
+            maysplit <- mMaysplit
+            case oldsplit of
+              Nothing -> return maysplit
+              Just split -> return $ maybe oldsplit (\newsplit -> Just $ split ++ newsplit) maysplit
 
 
 -- | Remove variable renamings in fresh substitutions.
@@ -650,33 +675,35 @@ simpMinimize isContr = do
 -- | Traverse disjunctions and execute @f@ until it returns
 --   @Just (mfreeSubst, disjs)@.
 --   Then the @disjs@ is inserted at the current position, if @mfreeSubst@ is
---   @Just freesubst@, then it is applied to the equation store. @True@ is
---   returned if any modifications took place.
+--   @Just freesubst@, then it is applied to the equation store.
+--   @Nothing@ is returned if no modification took place
+--   If @Just splits@ is returned, new split goals have to be inserted at @splits@ (possibly empty)
 foreachDisj :: forall m. MonadFresh m
             => MaudeHandle
             -> ([LNSubstVFresh] -> m (Maybe (Maybe LNSubst, [S.Set LNSubstVFresh])))
-            -> StateT EqStore m Bool
+            -> StateT EqStore m (Maybe [SplitId])
 foreachDisj hnd f =
     go [] =<< gets (getConj . L.get eqsConj)
   where
-    go :: [(SplitId, S.Set StoreEntry)] -> [(SplitId, S.Set StoreEntry)] -> StateT EqStore m Bool
-    go _     []               = return False
+    go :: [(SplitId, S.Set StoreEntry)] -> [(SplitId, S.Set StoreEntry)] -> StateT EqStore m (Maybe [SplitId])
+    go _     []               = return Nothing
     go lefts ((idx,d):rights) = do
         b <- lift $ f ([y | SubstE y <- S.toList d])
         case b of
           Nothing              -> go ((idx,d):lefts) rights
           Just (msubst, disjs) -> do
               eqsConj =: Conj (reverse lefts ++ ((,) idx <$> map (S.map SubstE) disjs) ++ rights)
-              case msubst of
-                Nothing -> return ()
+              splitIds <- case msubst of
+                Nothing -> return []
                 Just s  -> do
                    oldStore <- MS.get
-                   newStore <- applyEqStore hnd s oldStore
+                   (newStore, ids) <- applyEqStore hnd s oldStore
                    MS.put newStore
+                   return ids
               -- FIXME maybe this is more performant with with modify instead of get -> put
               -- old code (without fresh monad):
               -- maybe (return ()) (\s -> MS.modify (applyEqStore hnd s)) msubst
-              return True
+              return $ Just splitIds
 
 ------------------------------------------------------------------------------
 -- Pretty printing

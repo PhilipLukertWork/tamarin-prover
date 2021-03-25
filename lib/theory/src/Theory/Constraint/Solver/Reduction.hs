@@ -687,10 +687,8 @@ solveTermEqs splitStrat eqs0 =
       eqs1 -> do
         hnd <- getMaudeHandle
         se  <- gets id
-        (eqs2, maySplitId) <- addEqs hnd eqs1 =<< getM sEqStore
-        setM sEqStore
-            =<< simp hnd (substCreatesNonNormalTerms hnd se)
-            =<< case (maySplitId, splitStrat) of
+        (eqs2, maySplitId, splitGoals) <- addEqs hnd eqs1 =<< getM sEqStore
+        eqs3 <- case (maySplitId, splitStrat) of
                   (Just splitId, SplitNow) -> disjunctionOfList
                                                 $ fromJustNote "solveTermEqs"
                                                 $ performSplit eqs2 splitId
@@ -698,6 +696,9 @@ solveTermEqs splitStrat eqs0 =
                       insertGoal (SplitG splitId) False
                       return eqs2
                   _                        -> return eqs2
+        (eqs4, splitGoals2) <- simp hnd (substCreatesNonNormalTerms hnd se) eqs3 
+        setM sEqStore eqs4
+        mapM_ (flip insertGoal False . SplitG) (splitGoals ++ splitGoals2)
         noContradictoryEqStore
         return Changed
 
@@ -754,7 +755,9 @@ solveRuleConstraints (Just eqConstr) = do
     (eqs, splitId) <- addRuleVariants eqConstr <$> getM sEqStore
     insertGoal (SplitG splitId) False
     -- do not use expensive substCreatesNonNormalTerms here
-    setM sEqStore =<< simp hnd (const (const False)) eqs
+    (store, ids) <- simp hnd (const (const False)) eqs
+    setM sEqStore store
+    mapM_ (flip insertGoal False . SplitG) ids
     noContradictoryEqStore
 solveRuleConstraints Nothing = return ()
 
