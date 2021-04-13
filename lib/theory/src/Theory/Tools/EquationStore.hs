@@ -333,6 +333,8 @@ recurseSubterms hnd = recurse
        var <- freshLVar "newVar" sort  -- generate a new variable
        let term = fAppAC f [small, varTerm var]  -- build the term small + newVar
        let unif = getUnifiers (Equal small term)  -- get unifiers of small + newVar = big
+       let term = fAppAC f [small, varTerm var]  -- build the term = small + newVar
+       let unif = getUnifiers (Equal term big)  -- get unifiers of small + newVar = big
        let filterDomain = [x | x <- concatMap domVFresh unif, x /= var]  -- contains all vars used except for newVar
        return $ map (SubstE . restrictVFresh filterDomain) unif  -- filter out occurrences of newVar
 
