@@ -295,7 +295,7 @@ addSubterm hnd st eqStore = do
     let (finalStore, splitId) = addEntries eqStore (S.fromList entries)
     return (finalStore, Just splitId)
 
--- | apply CR-rules S_subterm-ac-recurse and S_subterm-recurse iteratively
+-- | apply CR-rules S_subterm-ac-recurse and S_subterm-recurse iteratively while applying S_invalid in each step
 recurseSubterms :: MonadFresh m => MaudeHandle -> StoreEntry -> m [StoreEntry] 
 recurseSubterms hnd = recurse
   where
@@ -308,16 +308,22 @@ recurseSubterms hnd = recurse
 
     -- outputs Nothing if the recursion is supposed to end (i.e. nothing changes)
     step :: MonadFresh m => StoreEntry -> m (Maybe [StoreEntry])
-    step (SubtermE (small, big)) = case (viewTerm big) of
+    step (SubtermE (small, big)) = if sortOfLNTerm small == LSortNat && sortOfLNTerm big == LSortNat then
+       liftM Just $ acSubtermUnif NatPlus small big 
+       else case (viewTerm big) of
          Lit (Con _) -> return $ Just []  -- nothing can be a strict subterm of a constant
-         Lit (Var v) -> if Var v `elem` small then return $ Just []  -- cannot be satisfied TODO-SUBTERM replace "elem" by "elem-and-not-below-cancellation"
-                                              else return $ Nothing  -- do not recurse further; leave the subterm as is
+         Lit (Var v) -> if Var v `elem` small ||  -- cannot be satisfied (shorthand for rule S_subterm-chain) TODO-SUBTERM replace "elem" by "elem-and-not-below-cancellation"
+                           isPubVar big ||  -- CR-rule S_invalid  (atomicity of pub)
+                           isFreshVar big ||  -- CR-rule S_invalid  (atomicity of fresh)
+                           (isNatVar big && sortOfLNTerm small /= LSortNat)  -- CR-rule S_invalid  (no function no-nat -> nat exists)
+                        then return $ Just []  -- insert bottom ⊥
+                        else return $ Nothing  -- do not recurse further; leave the subterm as is
          FApp (AC f) _ -> do  -- apply CR-rule subterm-ac-recurse  TODO-SUBTERM check whether we need to exclude cancellation operators like XOR (in this case, return Nothing)
            acSpecial <- acSubtermUnif f small big
            return $ Just $ (concatMap (eqOrSubterm small) (getFlattenedACTerms f big)) ++ acSpecial
          FApp (NoEq _) ts -> return $ Just $ concatMap (eqOrSubterm small) ts  -- apply CR-rule subterm-recurse
          FApp (C _) _ -> return Nothing  -- we treat commutative but not associative symbols as cancellation operators
-         FApp List _ -> return Nothing  -- list seems to be unused
+         FApp List _ -> return Nothing  -- list seems to be unused (?)
     step (SubstE _) = return Nothing
 
     -- returns all terms that are in the nested ac
@@ -329,14 +335,12 @@ recurseSubterms hnd = recurse
     -- returns the unifiers of @small + newVar = big@
     acSubtermUnif :: MonadFresh m => ACSym -> LNTerm -> LNTerm -> m [StoreEntry]
     acSubtermUnif f small big = do
-       let sort = sortOfLNTerm big  -- big has the sort of the ac operator
-       var <- freshLVar "newVar" sort  -- generate a new variable
-       let term = fAppAC f [small, varTerm var]  -- build the term small + newVar
-       let unif = getUnifiers (Equal small term)  -- get unifiers of small + newVar = big
-       let term = fAppAC f [small, varTerm var]  -- build the term = small + newVar
-       let unif = getUnifiers (Equal term big)  -- get unifiers of small + newVar = big
-       let filterDomain = [x | x <- concatMap domVFresh unif, x /= var]  -- contains all vars used except for newVar
-       return $ map (SubstE . restrictVFresh filterDomain) unif  -- filter out occurrences of newVar
+        let sort = sortOfLNTerm big  -- big has the sort of the ac operator
+        var <- freshLVar "newVar" sort  -- generate a new variable
+        let term = fAppAC f [small, varTerm var]  -- build the term = small + newVar
+        let unif = getUnifiers (Equal term big)  -- get unifiers of small + newVar = big
+        let filterDomain = [x | x <- concatMap domVFresh unif, x /= var]  -- contains all vars used except for newVar
+        return $ map (SubstE . restrictVFresh filterDomain) unif  -- filter out occurrences of newVar
 
     eqOrSubterm :: LNTerm -> LNTerm -> [StoreEntry]
     eqOrSubterm small t = SubtermE (small, t) : map SubstE (getUnifiers (Equal small t))  -- the unifiers for the equation
@@ -356,8 +360,8 @@ applyEqStore hnd asubst eqStore
     = do 
       newConjs <- mapM modifyOneConj $ L.get eqsConj eqStore
       let newEqStore = EqStore newsubst newConjs $ L.get eqsNextSplitId eqStore
-      let splitGoals = filter (\x -> notElem x $ onlySingleSubtermSplits eqStore) $ onlySingleSubtermSplits newEqStore
-      return $ (newEqStore, splitGoals)  --TODO-SUBTERM: add right split ids (expanded singleton-subterms)
+      let newSplitGoals = filter (\x -> notElem x $ onlySingleSubtermSplits eqStore) $ onlySingleSubtermSplits newEqStore
+      return $ (newEqStore, newSplitGoals)  --TODO-SUBTERM: add right split ids (expanded singleton-subterms)
     -- FIXME maybe this is more performant with modify and second instead of making a new EqStore
     -- old code (without fresh monad):
     -- modify eqsConj (fmap (second (S.fromList . concatMap applyBound . S.toList))) $
@@ -721,10 +725,10 @@ prettyEqStore eqs@(EqStore substFree (Conj disjs) _nextSplitId) = vcat $
     ]
   where
     combine (header, d) = fsep [keyword_ header <> colon, nest 2 d]
-    ppDisj (idx, substs) =
+    ppDisj (idx, entries) =
         text (show (unSplitId idx) ++ ".") <-> numbered' conjs
       where
-        conjs  = map ppEntry $ S.toList substs
+        conjs = map ppEntry $ S.toList entries
 
     ppEq (a,b) =
       prettyNTerm (lit (Var a)) $$ nest (6::Int) (opEqual <-> prettyNTerm b)

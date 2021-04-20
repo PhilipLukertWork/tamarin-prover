@@ -55,6 +55,7 @@ module Theory.Constraint.System.Guarded (
 
   -- ** Conversions to non-bound representations
   , bvarToLVar
+  , bTermToLTerm
 --  , unbindAtom
   , openGuarded
 
@@ -321,6 +322,12 @@ substFree s = mapGuardedAtoms (\j a -> substFreeAtom [(v,i+j) | (v,i) <- s] a)
 bvarToLVar :: Ord c => Atom (VTerm c (BVar LVar)) -> Atom (VTerm c LVar)
 bvarToLVar =
     fmap (fmapTerm (fmap (foldBVar boundError id)))
+  where
+    boundError v = error $ "bvarToLVar: left-over bound variable '"
+                           ++ show v ++ "'"
+
+bTermToLTerm :: BLTerm -> LNTerm
+bTermToLTerm = fmapTerm (fmap (foldBVar boundError id))
   where
     boundError v = error $ "bvarToLVar: left-over bound variable '"
                            ++ show v ++ "'"

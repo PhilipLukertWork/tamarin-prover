@@ -52,6 +52,7 @@ module Term.LTerm (
   , isMsgVar
   , isFreshVar
   , isPubVar
+  , isNatVar
   , isPubConst
   , isSimpleTerm
   , getVar
@@ -255,7 +256,6 @@ pubTerm = lit . Con . Name PubName . NameId
 -- | @natTerm f@ represents the nat name @f@.
 natTerm :: String -> NTerm v
 natTerm = lit . Con . Name NatName . NameId
---TODO-MY add NumTerm
 
 -- | Return 'LSort' for given 'Name'.
 sortOfName :: Name -> LSort
@@ -263,7 +263,6 @@ sortOfName (Name FreshName _) = LSortFresh
 sortOfName (Name PubName   _) = LSortPub
 sortOfName (Name NodeName  _) = LSortNode
 sortOfName (Name NatName   _) = LSortNat
---TODO-MY add NumName
 
 -- | Is a term a public constant?
 isPubConst :: LNTerm -> Bool
@@ -329,6 +328,11 @@ isMsgVar _                         = False  --TODO-MY understand better how this
 isPubVar :: LNTerm -> Bool
 isPubVar (viewTerm -> Lit (Var v)) = (lvarSort v == LSortPub)
 isPubVar _                         = False  --TODO-MY understand better how this is used - maybe something needs to be done?
+
+-- | Is a term a number variable?
+isNatVar :: LNTerm -> Bool
+isNatVar (viewTerm -> Lit (Var v)) = (lvarSort v == LSortNat)
+isNatVar _                         = False
 
 -- | Is a term a fresh variable?
 isFreshVar :: LNTerm -> Bool

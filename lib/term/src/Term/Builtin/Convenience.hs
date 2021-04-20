@@ -21,6 +21,8 @@ b *: e = fAppAC Mult [b,e]
 b # e  = fAppAC Union [b,e]
 (+:) :: Ord a => Term a -> Term a -> Term a
 b +: e = fAppAC Xor [b,e]
+(++:) :: Ord a => Term a -> Term a -> Term a
+b ++: e = fAppAC NatPlus [b,e]
 
 adec, aenc, sdec, senc, sign, revealSign, rep, check_rep:: (Term a,Term a) -> Term a
 adec (a,b)       = fAppNoEq adecSym [a,b]

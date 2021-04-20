@@ -240,7 +240,7 @@ prettyProtoAtom ppS _ (Syntactic s) = ppS s
 prettyProtoAtom _ ppT (EqE l r) =
     sep [ppT l <-> opEqual, ppT r]
     -- sep [prettyNTerm l <-> text "≈", prettyNTerm r]
-prettyProtoAtom _ ppT (Subterm l r) = sep [ppT l <-> opEqual, ppT r]
+prettyProtoAtom _ ppT (Subterm l r) = sep [ppT l <-> opSubterm, ppT r]
 prettyProtoAtom _ _ (Less u v) = text (show u) <-> opLess <-> text (show v)
 prettyProtoAtom _ _ (Last i)   = operator_ "last" <> parens (text (show i))
 

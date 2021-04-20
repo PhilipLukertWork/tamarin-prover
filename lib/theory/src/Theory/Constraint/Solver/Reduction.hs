@@ -96,6 +96,7 @@ import           Extension.Data.Label
 import           Extension.Prelude
 
 import           Logic.Connectives
+import           Term.Builtin.Convenience
 
 import           Theory.Constraint.Solver.Contradictions
 import           Theory.Constraint.System
@@ -446,7 +447,14 @@ insertFormula = do
           -- CR-rule *S_{¬,⋖}*
           GGuarded All [] [Less i j] gf  | gf == gfalse -> do
               markAsSolved
-              insert False (gdisj [GAto (EqE i j), GAto (Less j i)])  --TODO-SUBTERM add a special behaviour to subterms?
+              insert False (gdisj [GAto (EqE i j), GAto (Less j i)])
+              
+          -- CR-rule *S_subterm-neg-nat*
+          GGuarded All [] [Subterm i j] gf  | gf == gfalse
+                                           && sortOfLNTerm (bTermToLTerm i) == LSortNat
+                                           && sortOfLNTerm (bTermToLTerm j) == LSortNat -> do
+              markAsSolved
+              insert False (GAto (Subterm j (i ++: fAppNatOne)))             
 
           -- CR-rule: FIXME add this rule to paper
           GGuarded All [] [EqE i@(bltermNodeId -> Just _)
@@ -696,7 +704,7 @@ solveTermEqs splitStrat eqs0 =
                       insertGoal (SplitG splitId) False
                       return eqs2
                   _                        -> return eqs2
-        (eqs4, splitGoals2) <- simp hnd (substCreatesNonNormalTerms hnd se) eqs3 
+        (eqs4, splitGoals2) <- simp hnd (substCreatesNonNormalTerms hnd se) eqs3
         setM sEqStore eqs4
         mapM_ (flip insertGoal False . SplitG) (splitGoals ++ splitGoals2)
         noContradictoryEqStore
