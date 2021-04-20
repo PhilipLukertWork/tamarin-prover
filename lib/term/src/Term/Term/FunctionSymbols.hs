@@ -32,6 +32,8 @@ module Term.Term.FunctionSymbols (
     , emapSymString
     , unionSymString
     , oneSymString
+    , fstSymString
+    , sndSymString
     , multSymString
     , zeroSymString
     , xorSymString
@@ -122,7 +124,7 @@ type NoEqFunSig = Set NoEqSym  --COMMENT-MY used to group symbols, e.g., in Buil
 -- Fixed function symbols
 ----------------------------------------------------------------------
 
-diffSymString, expSymString, invSymString, oneSymString, multSymString, xorSymString, zeroSymString :: ByteString
+diffSymString, expSymString, invSymString, oneSymString, fstSymString, sndSymString, multSymString, xorSymString, zeroSymString :: ByteString
 diffSymString = "diff"
 expSymString = "exp"
 invSymString = "inv"
