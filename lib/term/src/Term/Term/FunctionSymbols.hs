@@ -144,7 +144,7 @@ emapSymString, pmultSymString :: ByteString
 emapSymString  = "em"
 pmultSymString = "pmult"
 
-pairSym, diffSym, expSym, invSym, oneSym, fstSym, sndSym, pmultSym, zeroSym :: NoEqSym
+pairSym, diffSym, expSym, invSym, oneSym, fstSym, sndSym, pmultSym, zeroSym, natOneSym :: NoEqSym
 -- | Pairing.
 pairSym    = NoEqSym "pair" 2 Public Nothing
 -- | Diff.

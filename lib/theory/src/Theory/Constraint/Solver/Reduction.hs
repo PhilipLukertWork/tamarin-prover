@@ -483,12 +483,15 @@ insertFormula = do
 -- 'insertFormula'.
 reducibleFormula :: LNGuarded -> Bool
 reducibleFormula fm = case fm of
-    GAto _                        -> True
-    GConj _                       -> True
-    GGuarded Ex _ _ _             -> True
-    GGuarded All [] [Less _ _] gf -> gf == gfalse
-    GGuarded All [] [Last _]   gf -> gf == gfalse
-    _                             -> False
+    GAto _                           -> True
+    GConj _                          -> True
+    GGuarded Ex _ _ _                -> True
+    GGuarded All [] [Less _ _] gf    -> gf == gfalse
+    GGuarded All [] [Subterm i j] gf -> gf == gfalse
+                                        && sortOfLNTerm (bTermToLTerm i) == LSortNat
+                                        && sortOfLNTerm (bTermToLTerm j) == LSortNat
+    GGuarded All [] [Last _] gf      -> gf == gfalse
+    _                                -> False
 
 
 -- Goal management
