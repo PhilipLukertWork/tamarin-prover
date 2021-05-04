@@ -94,6 +94,7 @@ instance HasFrees SplitId where
     mapFrees     _   = pure
 
 data StoreEntry = SubtermE (LNTerm, LNTerm)
+                | NatSubtermE ((LNTerm, LNTerm), S.Set LNSubstVFresh)
                 | SubstE LNSubstVFresh
   deriving( Eq, Ord, Generic, Show )
 
@@ -136,27 +137,52 @@ $(mkLabels [''EqStore])
 emptyEqStore :: EqStore
 emptyEqStore = EqStore emptySubst (Conj []) (SplitId 0)
 
--- | @True@ iff the 'EqStore' is contradictory.
+-- | @contradictoryEqStore@ is the smallest possible contradictory equation store.
+contradictoryEqStore :: EqStore
+contradictoryEqStore = EqStore emptySubst falseEqConstrConj (SplitId 0)
+
+-- | If @True@ then the 'EqStore' is contradictory.
 eqsIsFalse :: EqStore -> Bool
 eqsIsFalse = any ((S.empty == ) . snd) . getConj . L.get eqsConj
 
+-- | Implements the CR-rule S_nat-chain (putting all nat-subterms together and testing unifiability)
+-- This is used in @simp@ and not (as one would think) in @contradictions@ because we have a MonadFresh in @simp@
+hasInvalidNatChain :: MonadFresh m => MaudeHandle -> EqStore -> m Bool
+hasInvalidNatChain hnd = (liftM unifiersEmpty) . (mapM getNewVarEquation) . rawNatSubtermRel
+  where
+    unifiersEmpty :: [Equal LNTerm] -> Bool
+    unifiersEmpty list = null (unifyLNTerm list `runReader` hnd)
+    getNewVarEquation :: MonadFresh m => (LNTerm, LNTerm) -> m (Equal LNTerm)
+    getNewVarEquation (small, big) = do
+        var <- freshLVar "newVar" LSortNat  -- generate a new variable
+        let term = fAppAC NatPlus [small, varTerm var]  -- build the term = small + newVar
+        return $ Equal term big  -- small + newVar = big
+
 -- | The false conjunction. It is always identified with split number -1.
 falseEqConstrConj :: Conj (SplitId, S.Set StoreEntry)
-falseEqConstrConj = Conj [ (SplitId (-1), S.empty) ]
+falseEqConstrConj = Conj [ (SplitId (-1), falseDisj) ]
 
 dropNameHintsBound :: EqStore -> EqStore
-dropNameHintsBound = modify eqsConj (Conj . map (second (S.map dropNameHintsLNSubstVFresh)) . getConj)
+dropNameHintsBound = modify eqsConj (Conj . map (second (S.map dropNameHintsEntry)) . getConj)
+  where
+    dropNameHintsEntry :: StoreEntry -> StoreEntry
+    dropNameHintsEntry (SubtermE st) = SubtermE st
+    dropNameHintsEntry (NatSubtermE (st, substs)) = NatSubtermE (st, S.map dropNameHintsLNSubstVFresh substs)
+    dropNameHintsEntry (SubstE subst) = SubstE $ dropNameHintsLNSubstVFresh subst
 
-dropNameHintsLNSubstVFresh :: StoreEntry -> StoreEntry
-dropNameHintsLNSubstVFresh (SubtermE st) = SubtermE st
-dropNameHintsLNSubstVFresh (SubstE subst) =
-    SubstE $ substFromListVFresh $ zip (map fst slist)
-                              ((`evalFresh` nothingUsed) . (`evalBindT` noBindings) $ renameDropNamehint (map snd slist))
-  where slist = substToListVFresh subst
+    dropNameHintsLNSubstVFresh :: LNSubstVFresh -> LNSubstVFresh
+    dropNameHintsLNSubstVFresh subst = substFromListVFresh $ zip (map fst slist)
+                                       ((`evalFresh` nothingUsed) . (`evalBindT` noBindings) $ renameDropNamehint (map snd slist))
+      where slist = substToListVFresh subst
   
--- | @(from,to)@ is in @rawSubtermRel@ iff $(from,to)$ is in a singleton-disjunction in @eqsConj@
+-- | @(from,to)@ is in @rawSubtermRel@ iff $SubtermE(from,to)$ is in a singleton-disjunction in @eqsConj@
 rawSubtermRel :: EqStore -> [(LNTerm,LNTerm)]
 rawSubtermRel store = [ st | [SubtermE st] <- entryLists]
+   where entryLists = [S.toList $ snd disj | disj <- getConj $ L.get eqsConj store]
+
+-- | @(from,to)@ is in @rawNatSubtermRel@ iff $NatSubtermE((from,to),_)$ is in a singleton-disjunction in @eqsConj@
+rawNatSubtermRel :: EqStore -> [(LNTerm,LNTerm)]
+rawNatSubtermRel store = [ st | [NatSubtermE (st,_)] <- entryLists]
    where entryLists = [S.toList $ snd disj | disj <- getConj $ L.get eqsConj store]
 
 -- Instances
@@ -167,13 +193,16 @@ instance Apply SplitId where
 
 instance Apply StoreEntry where
     apply subst (SubtermE (a,b)) = SubtermE (apply subst a, apply subst b)
+    apply subst (NatSubtermE ((a,b), substs)) = NatSubtermE ((apply subst a, apply subst b), S.map (flip composeVFresh subst) substs)
     apply subst (SubstE s) = SubstE (composeVFresh s subst)
 
 instance HasFrees StoreEntry where
     foldFrees f (SubtermE st) = foldFrees f st
+    foldFrees f (NatSubtermE st) = foldFrees f st
     foldFrees f (SubstE subst) = foldFrees f subst
     foldFreesOcc _ _ = const mempty
     mapFrees f (SubtermE st) = SubtermE <$> mapFrees f st
+    mapFrees f (NatSubtermE st) = NatSubtermE <$> mapFrees f st
     mapFrees f (SubstE subst) = SubstE <$> mapFrees f subst
 
 instance HasFrees EqStore where
@@ -252,7 +281,9 @@ performSplit eqStore idx =
     case break ((idx ==) . fst) (getConj $ L.get eqsConj eqStore) of
         (_, [])                   -> Nothing
         (before, (_, disj):after) -> Just $
-            mkNewEqStore before after <$> S.toList disj
+            mkNewEqStore before after <$> case S.toList disj of
+              [NatSubtermE (_, innerDisj)] -> map SubstE $ S.toList innerDisj
+              normalDisj                   -> normalDisj  --TODO-SUBTERM do we forget to add split-goals for NatSubtermE here?
   where
     mkNewEqStore before after subst =
         fst $ addEntries (set eqsConj (Conj (before ++ after)) eqStore) (S.singleton subst)
@@ -308,8 +339,11 @@ recurseSubterms hnd = recurse
 
     -- outputs Nothing if the recursion is supposed to end (i.e. nothing changes)
     step :: MonadFresh m => StoreEntry -> m (Maybe [StoreEntry])
-    step (SubtermE (small, big)) = if sortOfLNTerm small == LSortNat && sortOfLNTerm big == LSortNat then
-       liftM Just $ acSubtermUnif NatPlus small big 
+    step (SubtermE (small, big)) =
+       if sortOfLNTerm small == LSortNat && sortOfLNTerm big == LSortNat then  -- CR-rule S_nat (delayed)
+         do
+           splittedNatSubsts <- acSubtermUnif NatPlus small big
+           return $ Just [ NatSubtermE ((small, big), S.fromList splittedNatSubsts) ]
        else case (viewTerm big) of
          Lit (Con _) -> return $ Just []  -- nothing can be a strict subterm of a constant
          Lit (Var v) -> if Var v `elem` small ||  -- cannot be satisfied (shorthand for rule S_subterm-chain) TODO-SUBTERM replace "elem" by "elem-and-not-below-cancellation"
@@ -320,11 +354,12 @@ recurseSubterms hnd = recurse
                         else return $ Nothing  -- do not recurse further; leave the subterm as is
          FApp (AC f) _ -> do  -- apply CR-rule subterm-ac-recurse  TODO-SUBTERM check whether we need to exclude cancellation operators like XOR (in this case, return Nothing)
            acSpecial <- acSubtermUnif f small big
-           return $ Just $ (concatMap (eqOrSubterm small) (getFlattenedACTerms f big)) ++ acSpecial
+           return $ Just $ (concatMap (eqOrSubterm small) (getFlattenedACTerms f big)) ++ map SubstE acSpecial
          FApp (NoEq _) ts -> return $ Just $ concatMap (eqOrSubterm small) ts  -- apply CR-rule subterm-recurse
          FApp (C _) _ -> return Nothing  -- we treat commutative but not associative symbols as cancellation operators
          FApp List _ -> return Nothing  -- list seems to be unused (?)
     step (SubstE _) = return Nothing
+    step (NatSubtermE _) = return Nothing
 
     -- returns all terms that are in the nested ac
     getFlattenedACTerms :: ACSym -> LNTerm -> [LNTerm]
@@ -333,14 +368,14 @@ recurseSubterms hnd = recurse
     getFlattenedACTerms _ term = [term]
 
     -- returns the unifiers of @small + newVar = big@
-    acSubtermUnif :: MonadFresh m => ACSym -> LNTerm -> LNTerm -> m [StoreEntry]
+    acSubtermUnif :: MonadFresh m => ACSym -> LNTerm -> LNTerm -> m [LNSubstVFresh]
     acSubtermUnif f small big = do
         let sort = sortOfLNTerm big  -- big has the sort of the ac operator
         var <- freshLVar "newVar" sort  -- generate a new variable
         let term = fAppAC f [small, varTerm var]  -- build the term = small + newVar
         let unif = getUnifiers (Equal term big)  -- get unifiers of small + newVar = big
         let filterDomain = [x | x <- concatMap domVFresh unif, x /= var]  -- contains all vars used except for newVar
-        return $ map (SubstE . restrictVFresh filterDomain) unif  -- filter out occurrences of newVar
+        return $ map (restrictVFresh filterDomain) unif  -- filter out occurrences of newVar
 
     eqOrSubterm :: LNTerm -> LNTerm -> [StoreEntry]
     eqOrSubterm small t = SubtermE (small, t) : map SubstE (getUnifiers (Equal small t))  -- the unifiers for the equation
@@ -375,8 +410,13 @@ applyEqStore hnd asubst eqStore
     newsubst = asubst `compose` L.get eqsSubst eqStore
     
     applyBound :: MonadFresh m => StoreEntry -> m [StoreEntry]
+    applyBound (SubstE s) = liftM (map SubstE) (applyBoundSubst s)
     applyBound (SubtermE (small, big)) = recurseSubterms hnd $ SubtermE (apply newsubst small, apply newsubst big)
-    applyBound (SubstE s) = return $ map (SubstE . restrictVFresh (varsRange newsubst ++ domVFresh s)) $
+    applyBound (NatSubtermE ((small, big), substs)) = do
+      mappedSubsts <- liftM (concat) (mapM applyBoundSubst (S.toList substs))
+      return $ [NatSubtermE ((apply newsubst small, apply newsubst big), S.fromList mappedSubsts)]
+    applyBoundSubst :: MonadFresh m => LNSubstVFresh -> m [LNSubstVFresh]
+    applyBoundSubst s = return $ map (restrictVFresh (varsRange newsubst ++ domVFresh s)) $
         (`runReader` hnd) $ unifyLNTerm
           [ Equal (apply newsubst (varTerm lv)) t
           | let slist = substToListVFresh s,
@@ -459,8 +499,12 @@ simpDisjunction hnd isContr disj0 = do
 
 -- | @simp eqStore@ simplifies the equation store.
 simp :: MonadFresh m => MaudeHandle -> (LNSubst -> LNSubstVFresh -> Bool) -> EqStore -> m (EqStore, [SplitId])
-simp hnd isContr eqStore = liftM swap $ runStateT (loopSimp1 []) 
-               (trace (show ("eqStore", eqStore)) (eqStore))
+simp hnd isContr eqStore = do
+    (store1, splitIds) <- liftM swap $ runStateT (loopSimp1 []) eqStore
+    invalid <- hasInvalidNatChain hnd store1  -- after simplification, check wether there is an invalid chain
+    return $ if invalid
+      then (contradictoryEqStore, [])
+      else (store1, splitIds)
   where
     loopSimp1 oldSplits = do
       newMaysplits <- simp1 hnd isContr
@@ -484,7 +528,7 @@ simp1 hnd isContr = do
           b2 <- simpRemoveRenamings
           b3 <- simpEmptyDisj
           let ids3 = if or [b1, b2, b3] then Just [] else Nothing
-          ids4 <- acc ids3 $ foreachDisj hnd simpSingleton
+          ids4 <- acc ids3 $ foreachDisj hnd simpSingleton  --TODO-SUBTERMS error! Subterms are just filtered out, i.e., (subterm ∨ subst) is singleton
           ids5 <- acc ids4 $ foreachDisj hnd simpAbstractSortedVar
           ids6 <- acc ids5 $ foreachDisj hnd simpIdentify
           ids7 <- acc ids6 $ foreachDisj hnd simpAbstractFun
@@ -510,6 +554,7 @@ simpRemoveRenamings = do
       else return False
     where
       remove (SubstE x) = SubstE (removeRenamings x)
+      remove (NatSubtermE (x, substs)) = NatSubtermE (x, S.map removeRenamings substs)
       remove (SubtermE x) = SubtermE x
 
 
@@ -664,7 +709,6 @@ simpMinimize :: MonadFresh m => (LNSubstVFresh -> Bool) -> StateT EqStore m Bool
 simpMinimize isContr = do
     Conj conj <- gets (L.get eqsConj)
     list <- return [y | x <- conj, SubstE y <- S.toList $ snd x]
-    --conj <- MS.gets (L.get eqsConj)
     if F.any check list
       then MS.modify (set eqsConj (fmap (second minimize) $ Conj conj)) >> return True
       else return False
@@ -672,9 +716,15 @@ simpMinimize isContr = do
     minimize :: S.Set StoreEntry -> S.Set StoreEntry
     minimize substs
       | SubstE emptySubstVFresh `S.member` substs = S.singleton (SubstE emptySubstVFresh)
-      | otherwise                                 = S.filter (not . myContr) substs
+      | emptyInNat substs                         = S.singleton (SubstE emptySubstVFresh)
+      | otherwise                                 = S.map filterNat $ S.filter (not . myContr) substs
+    emptyInNat :: S.Set StoreEntry -> Bool
+    emptyInNat substs = any (S.member emptySubstVFresh . snd) [y | NatSubtermE y <- S.toList substs]
+    filterNat (NatSubtermE (st, substs)) = NatSubtermE (st, S.filter (not . isContr) substs)
+    filterNat x = x
     myContr (SubstE x) = isContr x
     myContr (SubtermE _) = False
+    myContr (NatSubtermE _) = False
     check subst = subst == emptySubstVFresh || isContr subst
 
 
@@ -738,6 +788,7 @@ prettyEqStore eqs@(EqStore substFree (Conj disjs) _nextSplitId) = vcat $
       , nest 2 $ fsep $ intersperse opLAnd $ map ppEq $ substToListVFresh subst
       ]
     ppEntry (SubtermE (a,b)) = prettyNTerm a $$ nest (6::Int) (opSubterm <-> prettyNTerm b)
+    ppEntry (NatSubtermE ((a,b),_)) = prettyNTerm a $$ nest (6::Int) (opSubterm <-> prettyNTerm b)
 
 
 -- Derived and delayed instances

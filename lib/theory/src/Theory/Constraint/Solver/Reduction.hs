@@ -713,15 +713,20 @@ solveTermEqs splitStrat eqs0 =
         noContradictoryEqStore
         return Changed
 
+-- | Similar to solveTermEqs but inserts a (single) Subterm predicate instead of a set of equations 
 solveSubtermEq :: SplitStrategy -> (LNTerm, LNTerm) -> Reduction ChangeIndicator
 solveSubtermEq splitStrat st = do
     hnd <- getMaudeHandle
+    se  <- gets id
     origStore <- getM sEqStore
     (store, maySplitId) <- addSubterm hnd st origStore
-    setM sEqStore =<< case (maySplitId, splitStrat) of
+    store2 <- case (maySplitId, splitStrat) of
        (Just splitId, SplitNow) -> disjunctionOfList $ fromJustNote "solveSubtermEq" $ performSplit store splitId
        (Just splitId, SplitLater) -> insertGoal (SplitG splitId) False >> return store
        _ -> return origStore  -- nothing changes
+    (store3, splitGoals) <- simp hnd (substCreatesNonNormalTerms hnd se) store2
+    setM sEqStore store3
+    mapM_ (flip insertGoal False . SplitG) splitGoals
     noContradictoryEqStore
     return $ case maySplitId of
        Nothing -> Unchanged  -- origStore was inserted
