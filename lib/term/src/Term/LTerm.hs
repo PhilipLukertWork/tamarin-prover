@@ -60,6 +60,7 @@ module Term.LTerm (
   , freshToConst
   , variableToConst
   , niFactors
+  , flattenedACTerms
   , containsPrivate
   , containsNoPrivateExcept
   , neverContainsFreshPriv
@@ -361,6 +362,13 @@ niFactors t = case viewTerm2 t of
                 FMult ts -> concatMap niFactors ts
                 FInv t1  -> niFactors t1
                 _        -> [t]
+
+-- | If @[term1, ..., termN]@ is returned, then @t = term1 + ... + termN@ where @+@ is the ACSymbol.
+-- It is made sure that the length of the returned list is maximal (i.e., the + is flattened)
+flattenedACTerms :: ACSym -> Term t -> [Term t]
+flattenedACTerms f (viewTerm -> FApp (AC sym) ts)
+  | sym == f = concatMap (flattenedACTerms f) ts
+flattenedACTerms _ term = [term]
 
 -- | @containsPrivate t@ returns @True@ if @t@ contains private function symbols.
 containsPrivate :: Term t -> Bool  --NOT-TODO-MY this function is all-fine; nothing to do as non-Private is only diff

@@ -80,6 +80,7 @@ import qualified Data.Map.Strict                         as M'
 import qualified Data.Set                                as S
 import qualified Data.ByteString.Char8                   as BC
 import           Data.List                               (mapAccumL)
+import           Data.Maybe                              (isJust)
 import           Safe
 
 import           Control.Basics
@@ -454,7 +455,48 @@ insertFormula = do
                                            && sortOfLNTerm (bTermToLTerm i) == LSortNat
                                            && sortOfLNTerm (bTermToLTerm j) == LSortNat -> do
               markAsSolved
-              insert False (GAto (Subterm j (i ++: fAppNatOne)))             
+              insert False (GAto (Subterm j (i ++: fAppNatOne)))
+----------------------------------- these two rules are performance improvements that might rather go into partialAtomValuation in Simplify.hs -----------------------------------
+          -- mark i ⊄ i as solved
+--          GGuarded All [] [Subterm i j] gf | gf == gfalse
+--                                           && i == j -> do
+--              markAsSolved
+
+          -- mark i ⊄ j as solved if j is a variable that occurs in i and i≠j
+--          GGuarded All [] [Subterm i j] gf | gf == gfalse  -- i≠j is ensured by the previous case
+--                                           && maybe False  -- j needs to be a variable
+--                                              (\v -> Var v `elem` bTermToLTerm i) -- j is in i
+--                                              (getVar $ bTermToLTerm j) -> do
+--              markAsSolved
+--              if i == j then
+--                return ()  -- with i==j the term i⊄j always holds
+--                else insert False gfalse  -- if j is in i then the term i⊄j always holds FIXME maybe move this to Contradictions.hs ?
+
+          -- CR-rule *S_subterm-neg-notneg*
+          GGuarded All [] [Subterm _ j] gf | gf == gfalse
+                                           && isMsgVar (bTermToLTerm j) -> do
+              --subtermRel <- liftM rawSubtermRel $ getM sEqStore
+              --let matching = filter ((bTermToLTerm j ==) . snd) subtermRel
+              --mapM_ (\(small, _) -> do
+                --let smallB = lTermToBTerm small
+                --insert False (gnotAtom $ Subterm i smallB)
+                --insert False (gnotAtom $ EqE i smallB)
+                --) matching
+              modM sFormulas (S.insert fm)
+
+          -- mark invalid negative subterm predicates as solved
+          -- (if @(i,j)@ do not have sorts @(any,msg)@ or @(nat,nat)@, it is never satisfiable)
+          GGuarded All [] [Subterm _ j] gf | gf == gfalse
+                                           && isJust (getVar (bTermToLTerm j)) -> do
+              markAsSolved
+
+          -- here, @j@ is not a variable -> apply the CR-rules *S_subterm-neg-[ac-]recurse*
+          GGuarded All [] [Subterm i j] gf | gf == gfalse  -> do
+              destructed <- destructNegSubterms (i, j)
+              case destructed of
+                (Just x) -> markAsSolved >> mapM_ (insert False) x
+                Nothing  -> modM sFormulas (S.insert fm)  -- there was a cancellation operator at the top  --TODO-SUBTERM care for cancellation operator
+
 
           -- CR-rule: FIXME add this rule to paper
           GGuarded All [] [EqE i@(bltermNodeId -> Just _)
@@ -479,7 +521,32 @@ insertFormula = do
       where
         markAsSolved = when mark $ modM sSolvedFormulas $ S.insert fm
 
--- | 'True' iff the formula can be reduced by one of the rules implemented in
+        -- implements one step of the CR-rule S_neg-[ac-]recurse
+        destructNegSubterms :: MonadFresh m => (BLTerm, BLTerm) -> m (Maybe [LNGuarded])
+        destructNegSubterms (small, big) = case viewTerm big of
+                 Lit (Con _) -> return $ Just []  -- nothing can be a strict subterm of a constant
+                 FApp (AC f) _ -> do  -- apply CR-rule subterm-ac-recurse  TODO-SUBTERM check whether we need to exclude cancellation operators like XOR (in this case, return Nothing)
+                   acSpecial <- acSubtermEqE f small big
+                   return $ Just $ acSpecial : concatMap (notEqAndNotSubterm small) (flattenedACTerms f big)
+                 FApp (NoEq _) ts -> return $ Just $ concatMap (notEqAndNotSubterm small) ts  -- apply CR-rule subterm-recurse  TODO-SUBTERM exclude cancellation operators
+                 FApp (C _) _ -> return $ Nothing  -- we treat commutative but not associative symbols as cancellation operators
+                 FApp List _ -> return $ Nothing  -- list seems to be unused (?)
+                 _ -> error "there cannot be a variable at this point; check the order of the case distinction above"
+           where
+             notEqAndNotSubterm :: BLTerm -> BLTerm -> [LNGuarded]
+             notEqAndNotSubterm small t = map gnotAtom [Subterm small t, EqE small t]  -- the unifiers for the equation
+
+        -- returns the equation @small + newVar ≠ big@ for the CR-rule S_neg-ac-recurse
+        acSubtermEqE :: MonadFresh m => ACSym -> BLTerm -> BLTerm -> m LNGuarded
+        acSubtermEqE f small big = do
+            let sort = sortOfLNTerm $ bTermToLTerm big  -- big has the sort of the ac operator
+            newVar <- freshLVar "newVar" sort  -- generate a new variable
+            let term = fAppAC f [small, varTerm $ Free newVar]  -- build the term = small + newVar
+            return $ gnotAtom $ EqE term big  -- get equation small + newVar ≠ big
+
+        
+
+-- | if 'True' then the formula can be reduced by one of the rules implemented in
 -- 'insertFormula'.
 reducibleFormula :: LNGuarded -> Bool
 reducibleFormula fm = case fm of
@@ -487,9 +554,10 @@ reducibleFormula fm = case fm of
     GConj _                          -> True
     GGuarded Ex _ _ _                -> True
     GGuarded All [] [Less _ _] gf    -> gf == gfalse
-    GGuarded All [] [Subterm i j] gf -> gf == gfalse
-                                        && sortOfLNTerm (bTermToLTerm i) == LSortNat
-                                        && sortOfLNTerm (bTermToLTerm j) == LSortNat
+    GGuarded All [] [Subterm i j] gf -> gf == gfalse && (
+                                          (sortOfLNTerm (bTermToLTerm i) == LSortNat && sortOfLNTerm (bTermToLTerm j) == LSortNat)
+                                            || not (isMsgVar $ bTermToLTerm j)
+                                        )  --TODO-SUBTERM care for cancellation operator, see case for CR-rules *S_subterm-neg-[ac-]recurse* in insertFormula
     GGuarded All [] [Last _] gf      -> gf == gfalse
     _                                -> False
 
@@ -713,7 +781,7 @@ solveTermEqs splitStrat eqs0 =
         noContradictoryEqStore
         return Changed
 
--- | Similar to solveTermEqs but inserts a (single) Subterm predicate instead of a set of equations 
+-- | Similar to solveTermEqs but inserts a (single) Subterm predicate instead of a set of equations
 solveSubtermEq :: SplitStrategy -> (LNTerm, LNTerm) -> Reduction ChangeIndicator
 solveSubtermEq splitStrat st = do
     hnd <- getMaudeHandle

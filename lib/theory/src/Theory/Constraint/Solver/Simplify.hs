@@ -89,6 +89,7 @@ simplifySystem = do
               c6 <- reduceFormulas
               c7 <- evalFormulaAtoms
               c8 <- insertImpliedFormulas
+              c9 <- negativeSubtermVars
 
               -- Report on looping behaviour if necessary
               let changes = filter ((Changed ==) . snd) $
@@ -100,6 +101,7 @@ simplifySystem = do
                     , ("decompose trace formula",             c6)
                     , ("propagate atom valuation to formula", c7)
                     , ("saturate under ∀-clauses (S_∀)",      c8)
+                    , ("process neg-subterms (S_subterm-neg)",c9)
                     ]
                   traceIfLooping
                     | n <= 10   = id
@@ -119,6 +121,7 @@ simplifySystem = do
               c6 <- reduceFormulas
               c7 <- evalFormulaAtoms
               c8 <- insertImpliedFormulas
+              c9 <- negativeSubtermVars
 
               -- Report on looping behaviour if necessary
               let changes = filter ((Changed ==) . snd) $
@@ -130,6 +133,7 @@ simplifySystem = do
                     , ("decompose trace formula",             c6)
                     , ("propagate atom valuation to formula", c7)
                     , ("saturate under ∀-clauses (S_∀)",      c8)
+                    , ("process neg-subterms (S_subterm-neg)",c9)
                     ]
                   traceIfLooping
                     | n <= 10   = id
@@ -396,4 +400,41 @@ insertImpliedFormulas = do
              implied `S.notMember` get sSolvedFormulas sys )
           then return (insertFormula implied)
           else []
+
+
+-- | CR-rule *S_subterm-neg*: @s ⊄ x, t ⊂ x --insert--> s ⊄ t, s ≠ t@
+negativeSubtermVars :: Reduction ChangeIndicator
+negativeSubtermVars = do
+  formulas <- getM sFormulas
+  changelists <- mapM (\f -> case f of
+      (GGuarded All [] [Subterm i j] gf) | gf == gfalse && isMsgVar (bTermToLTerm j) -> do
+          subtermRel <- liftM rawSubtermRel $ getM sEqStore
+          let matching = filter ((bTermToLTerm j ==) . snd) subtermRel
+          mapM (\(small, _) -> do
+            let smallB = lTermToBTerm small
+            c1 <- tryInsert (gnotAtom $ Subterm i smallB)
+            c2 <- tryInsert (gnotAtom $ EqE i smallB)
+            return [c1, c2]
+            ) matching
+      _ -> return []
+    ) (S.toList formulas)
+  let changed = Changed `elem` concat (concat changelists)
+  return $ if changed then Changed else Unchanged
+  
+    where
+    tryInsert :: LNGuarded -> Reduction ChangeIndicator
+    tryInsert f = do
+        formulas       <- getM sFormulas
+        solvedFormulas <- getM sSolvedFormulas
+        if f `S.member` formulas || f `S.member` solvedFormulas then
+            return Unchanged
+          else
+            insertFormula f >> return Changed
+
+
+
+
+
+
+
 

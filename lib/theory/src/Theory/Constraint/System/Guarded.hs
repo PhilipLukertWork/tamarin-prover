@@ -29,6 +29,7 @@ module Theory.Constraint.System.Guarded (
   , gconj
   , gex
   , gall
+  , gnotAtom
   , gnot
   , ginduct
 
@@ -56,6 +57,7 @@ module Theory.Constraint.System.Guarded (
   -- ** Conversions to non-bound representations
   , bvarToLVar
   , bTermToLTerm
+  , lTermToBTerm
 --  , unbindAtom
   , openGuarded
 
@@ -326,11 +328,19 @@ bvarToLVar =
     boundError v = error $ "bvarToLVar: left-over bound variable '"
                            ++ show v ++ "'"
 
+-- | Assuming that there are no more bound variables left in a term,
+-- convert it to a term with free variables only.
+-- This is especially used in 'insertFormula' where it is surrounded by
+-- an empty universal quantification that cannot have any bound variables.
 bTermToLTerm :: BLTerm -> LNTerm
 bTermToLTerm = fmapTerm (fmap (foldBVar boundError id))
   where
     boundError v = error $ "bvarToLVar: left-over bound variable '"
                            ++ show v ++ "'"
+
+-- | convert a term to a term with bounded variables
+lTermToBTerm :: LNTerm -> BLTerm
+lTermToBTerm = fmapTerm (fmap Free)
 
 -- | Assuming that there are no more bound variables left in an atom of a
 -- formula, convert it to an atom with free variables only.

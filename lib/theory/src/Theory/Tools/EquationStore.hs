@@ -354,18 +354,12 @@ recurseSubterms hnd = recurse
                         else return $ Nothing  -- do not recurse further; leave the subterm as is
          FApp (AC f) _ -> do  -- apply CR-rule subterm-ac-recurse  TODO-SUBTERM check whether we need to exclude cancellation operators like XOR (in this case, return Nothing)
            acSpecial <- acSubtermUnif f small big
-           return $ Just $ (concatMap (eqOrSubterm small) (getFlattenedACTerms f big)) ++ map SubstE acSpecial
-         FApp (NoEq _) ts -> return $ Just $ concatMap (eqOrSubterm small) ts  -- apply CR-rule subterm-recurse
+           return $ Just $ (concatMap (eqOrSubterm small) (flattenedACTerms f big)) ++ map SubstE acSpecial
+         FApp (NoEq _) ts -> return $ Just $ concatMap (eqOrSubterm small) ts  -- apply CR-rule subterm-recurse  TODO-SUBTERM exclude cancellation operators
          FApp (C _) _ -> return Nothing  -- we treat commutative but not associative symbols as cancellation operators
          FApp List _ -> return Nothing  -- list seems to be unused (?)
     step (SubstE _) = return Nothing
     step (NatSubtermE _) = return Nothing
-
-    -- returns all terms that are in the nested ac
-    getFlattenedACTerms :: ACSym -> LNTerm -> [LNTerm]
-    getFlattenedACTerms f term@(viewTerm -> FApp (AC sym) ts)
-      = if sym == f then concatMap (getFlattenedACTerms f) ts else [term]
-    getFlattenedACTerms _ term = [term]
 
     -- returns the unifiers of @small + newVar = big@
     acSubtermUnif :: MonadFresh m => ACSym -> LNTerm -> LNTerm -> m [LNSubstVFresh]
