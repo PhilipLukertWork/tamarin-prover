@@ -534,7 +534,7 @@ insertFormula = do
                  _ -> error "there cannot be a variable at this point; check the order of the case distinction above"
            where
              notEqAndNotSubterm :: BLTerm -> BLTerm -> [LNGuarded]
-             notEqAndNotSubterm small t = map gnotAtom [Subterm small t, EqE small t]  -- the unifiers for the equation
+             notEqAndNotSubterm s t = map gnotAtom [Subterm s t, EqE s t]  -- the unifiers for the equation
 
         -- returns the equation @small + newVar ≠ big@ for the CR-rule S_neg-ac-recurse
         acSubtermEqE :: MonadFresh m => ACSym -> BLTerm -> BLTerm -> m LNGuarded

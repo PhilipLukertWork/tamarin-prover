@@ -373,7 +373,13 @@ partialAtomValuation ctxt sys =
                     | nonUnifiableNodes i j         -> Just False
                   _                                 -> Nothing
                   
-          Subterm _ _ -> Nothing  --TODO-SUBTERM (can be optimized but should work like this)
+          Subterm small big
+             | small == big                         -> Just False
+             | maybe False  -- big needs to be a variable
+                 (\v -> Var v `elem` small) -- big is in small  --TODO-SUBTERM care for cancellation operators!
+                 (getVar $ big)  -- big is a variable
+                                                    -> Just False
+             | otherwise                            -> Nothing  --TODO-SUBTERM add a case small is in big -> Just True (care for cancellation operators!)
 
           Last (ltermNodeId' -> i)
             | isLast sys i                       -> Just True
@@ -420,7 +426,7 @@ negativeSubtermVars = do
     ) (S.toList formulas)
   let changed = Changed `elem` concat (concat changelists)
   return $ if changed then Changed else Unchanged
-  
+
     where
     tryInsert :: LNGuarded -> Reduction ChangeIndicator
     tryInsert f = do

@@ -64,7 +64,7 @@ import           Control.Monad.Bind
 import           Control.Monad.Reader
 import           Extension.Prelude
 
-import           Debug.Trace.Ignore
+import           Debug.Trace
 
 import           Control.Basics
 import           Control.DeepSeq
@@ -495,7 +495,7 @@ simpDisjunction hnd isContr disj0 = do
 simp :: MonadFresh m => MaudeHandle -> (LNSubst -> LNSubstVFresh -> Bool) -> EqStore -> m (EqStore, [SplitId])
 simp hnd isContr eqStore = do
     (store1, splitIds) <- liftM swap $ runStateT (loopSimp1 []) eqStore
-    invalid <- hasInvalidNatChain hnd store1  -- after simplification, check wether there is an invalid chain
+    invalid <- hasInvalidNatChain hnd store1  -- after simplification, check wether there is an invalid chain TODO-SUBTERM move this to simp1?
     return $ if invalid
       then (contradictoryEqStore, [])
       else (store1, splitIds)
@@ -520,57 +520,85 @@ simp1 hnd isContr = do
         else do
           b1 <- simpMinimize (isContr (L.get eqsSubst eqs))
           b2 <- simpRemoveRenamings
-          b3 <- simpEmptyDisj
-          let ids3 = if or [b1, b2, b3] then Just [] else Nothing
-          ids4 <- acc ids3 $ foreachDisj hnd simpSingleton  --TODO-SUBTERMS error! Subterms are just filtered out, i.e., (subterm ∨ subst) is singleton
-          ids5 <- acc ids4 $ foreachDisj hnd simpAbstractSortedVar
-          ids6 <- acc ids5 $ foreachDisj hnd simpIdentify
-          ids7 <- acc ids6 $ foreachDisj hnd simpAbstractFun
-          ids8 <- acc ids7 $ foreachDisj hnd simpAbstractName
-          (trace (show ("simp:", [b1, b2, b3]))) $
-              return $ ids8
-        where
-          acc :: MonadFresh m => Maybe [SplitId] -> m (Maybe [SplitId]) -> m (Maybe [SplitId])
-          acc oldsplit mMaysplit = do
-            maysplit <- mMaysplit
-            case oldsplit of
-              Nothing -> return maysplit
-              Just split -> return $ maybe oldsplit (\newsplit -> Just $ split ++ newsplit) maysplit
+          b3 <- simpEmptyNat
+          b4 <- simpEmptyDisj
+          let ids1 = [Just [] | b1 || b2 || b3 || b4]
+          ids2 <- (: ids1) <$> simpSingleton hnd
+          ids3 <- (: ids2) <$> foreachDisj hnd simpAbstractSortedVar
+          ids4 <- (: ids3) <$> foreachDisj hnd simpIdentify
+          ids5 <- (: ids4) <$> foreachDisj hnd simpAbstractFun
+          ids6 <- (: ids5) <$> foreachDisj hnd simpAbstractName
+          trace (show ("simp:", [b1, b2, b3, b4], ids6)) $
+            return $ if all isNothing ids6 then Nothing else (Just . concat . catMaybes) ids6
 
 
 -- | Remove variable renamings in fresh substitutions.
 simpRemoveRenamings :: MonadFresh m => StateT EqStore m Bool
 simpRemoveRenamings = do
     Conj conj <- gets (L.get eqsConj)
-    list <- return [y | x <- conj, SubstE y <- S.toList $ snd x]
+    let list = concat [getSubsts y | x <- conj, y <- S.toList $ snd x]  --all substitutions in all disjunctions
     if F.any (\subst -> domVFresh subst /= domVFresh (removeRenamings subst)) list
       then modM eqsConj (fmap (second $ S.map remove)) >> return True
       else return False
     where
+      getSubsts :: StoreEntry -> [LNSubstVFresh]
+      getSubsts (SubstE s) = [s]
+      getSubsts (NatSubtermE (_, substs)) = S.toList $ substs
+      getSubsts (SubtermE _) = []
+
       remove (SubstE x) = SubstE (removeRenamings x)
       remove (NatSubtermE (x, substs)) = NatSubtermE (x, S.map removeRenamings substs)
       remove (SubtermE x) = SubtermE x
 
+
+-- | If a NatSubtermE with an empty set of substitutions is found, this can be removed
+simpEmptyNat :: MonadFresh m => StateT EqStore m Bool
+simpEmptyNat = do
+    conj <- getM eqsConj
+    if F.any (any isEmptyNat . snd) conj
+      then eqsConj =: (Conj . map (second (S.filter (not . isEmptyNat))) . getConj) conj
+        >> return True
+      else return False
+    where
+      isEmptyNat :: StoreEntry -> Bool
+      isEmptyNat (NatSubtermE (st, substs)) = trace (show st ++ show substs) substs == S.empty
+      isEmptyNat _ = False
 
 -- | If empty disjunction is found, the whole conjunct
 --   can be simplified to False.
 simpEmptyDisj :: MonadFresh m => StateT EqStore m Bool
 simpEmptyDisj = do
     conj <- getM eqsConj
-    if (F.any ((== falseDisj) . snd) conj && conj /= falseEqConstrConj)
+    if F.any ((== falseDisj) . snd) conj && conj /= falseEqConstrConj
       then eqsConj =: falseEqConstrConj >> return True
       else return False
 
 
 -- | If there is a singleton disjunction, it can be
 --   composed with the free substitution.
-simpSingleton :: MonadFresh m
-              => [LNSubstVFresh]
-              -> m (Maybe (Maybe LNSubst, [S.Set LNSubstVFresh]))
-simpSingleton [subst0] = do
-        subst <- freshToFree subst0
-        return (Just (Just subst, []))
-simpSingleton _        = return Nothing
+simpSingleton :: forall m. MonadFresh m => MaudeHandle -> StateT EqStore m (Maybe [SplitId])
+simpSingleton hnd = go [] =<< gets (getConj . L.get eqsConj)
+  where
+    go :: [(SplitId, S.Set StoreEntry)] -> [(SplitId, S.Set StoreEntry)] -> StateT EqStore m (Maybe [SplitId])
+    go _     []               = return Nothing
+    go lefts ((idx,d):rights) = do
+      case getSingletonSubst (S.toList d) of
+        Nothing -> go ((idx,d):lefts) rights
+        Just s -> do
+          subst <- freshToFree s
+          eqsConj =: Conj (reverse lefts ++ rights)
+          oldStore <- MS.get
+          (newStore, splitIds) <- applyEqStore hnd subst oldStore
+          MS.put newStore  -- FIXME maybe this is more performant with with modify instead of get -> put
+          return $ Just splitIds
+
+    -- gives the substitution if the list of StoreEntry is a singleton substitution (could also be in NatSubtermE)
+    getSingletonSubst :: [StoreEntry] -> Maybe LNSubstVFresh
+    getSingletonSubst [SubstE s] = Just s
+    getSingletonSubst [NatSubtermE (_,ss)] = case S.toList ss of
+                                               [s] -> Just s
+                                               _   -> Nothing
+    getSingletonSubst _ = Nothing
 
 
 -- | If all substitutions @si@ map a variable @v@ to terms with the same
@@ -579,7 +607,7 @@ simpSingleton _        = return Nothing
 --   @x |-> ..@ by @{x1 |-> ti1, x2 |-> ti2, ..}@ in all substitutions @si@.
 simpAbstractFun :: MonadFresh m
                 => [LNSubstVFresh]
-                -> m (Maybe (Maybe LNSubst, [S.Set LNSubstVFresh]))
+                -> m (Maybe (LNSubst, [LNSubstVFresh]))
 simpAbstractFun []             = return Nothing
 simpAbstractFun (subst:others) = case commonOperators of
     [] -> return Nothing
@@ -588,20 +616,20 @@ simpAbstractFun (subst:others) = case commonOperators of
         fvars <- mapM (\_ -> freshLVar "x" LSortMsg) args
         let substs' = zipWith (abstractAll v fvars) (subst:others) argss
             fsubst  = substFromList [(v, fApp o (map varTerm fvars))]
-        return $ Just (Just fsubst, [S.fromList substs'])
+        return $ Just (fsubst, substs')
     -- abstract first two arguments
     (v, o@(AC _), argss):_ -> do
         fv1 <- freshLVar "x" LSortMsg
         fv2 <- freshLVar "x" LSortMsg
         let substs' = zipWith (abstractTwo o v fv1 fv2) (subst:others) argss
             fsubst  = substFromList [(v, fApp o (map varTerm [fv1,fv2]))]
-        return $ Just (Just fsubst, [S.fromList substs'])
+        return $ Just (fsubst, substs')
     (_, _ ,_):_ ->
         error "simpAbstract: impossible, invalid arities or List operator encountered."
   where
     commonOperators = do
         (v, viewTerm -> FApp o args) <- substToListVFresh subst
-        let images = map (\s -> imageOfVFresh s v) others
+        let images = map (`imageOfVFresh` v) others
             argss  = [ args' | Just (viewTerm -> FApp o' args') <- images, o' == o ]
         guard (length argss == length others)
         return (v, o, args:argss)
@@ -625,17 +653,17 @@ simpAbstractFun (subst:others) = case commonOperators of
 --   @{v |-> n}@ and we can remove @{v -> n}@ from all substitutions @si@
 simpAbstractName :: MonadFresh m
                  => [LNSubstVFresh]
-                 -> m (Maybe (Maybe LNSubst, [S.Set LNSubstVFresh]))
+                 -> m (Maybe (LNSubst, [LNSubstVFresh]))
 simpAbstractName []             = return Nothing
 simpAbstractName (subst:others) = case commonNames of
     []           -> return Nothing
     (v, c):_     ->
-        return $ Just (Just $ substFromList [(v, c)]
-                      , [S.fromList (map (\s -> restrictVFresh (delete v (domVFresh s)) s) (subst:others))])
+        return $ Just (substFromList [(v, c)]
+                      , map (\s -> restrictVFresh (delete v (domVFresh s)) s) (subst:others))
   where
     commonNames = do
         (v, c@(viewTerm -> Lit (Con _))) <- substToListVFresh subst
-        let images = map (\s -> imageOfVFresh s v) others
+        let images = map (`imageOfVFresh` v) others
         guard (length images == length [ () | Just c' <- images, c' == c])
         return (v, c)
 
@@ -646,33 +674,33 @@ simpAbstractName (subst:others) = case commonNames of
 --   and we can replace @{v -> xi}@ by @{y -> xi}@ in all substitutions @si@
 simpAbstractSortedVar :: MonadFresh m
                       => [LNSubstVFresh]
-                      -> m (Maybe (Maybe LNSubst, [S.Set LNSubstVFresh]))
+                      -> m (Maybe (LNSubst, [LNSubstVFresh]))
 simpAbstractSortedVar []             = return Nothing
 simpAbstractSortedVar (subst:others) = case commonSortedVar of
     []            -> return Nothing
     (v, s, lvs):_ -> do
         fv <- freshLVar (lvarName v) s
-        return $ Just (Just $ substFromList [(v, varTerm fv)]
-                      , [S.fromList (zipWith (replaceMapping v fv) lvs (subst:others))])
+        return $ Just (substFromList [(v, varTerm fv)]
+                      , zipWith (replaceMapping v fv) lvs (subst:others))
   where
     commonSortedVar = do
-        (v, (viewTerm -> Lit (Var lx))) <- substToListVFresh subst
+        (v, viewTerm -> Lit (Var lx)) <- substToListVFresh subst
         guard (sortCompare (lvarSort v)  (lvarSort lx) == Just GT)
-        let images = map (\s -> imageOfVFresh s v) others
+        let images = map (`imageOfVFresh` v) others
             -- FIXME: could be generalized to choose topsort s of all images if s < sortOf v
             --        could also be generalized to terms of a given sort
             goodImages = [ ly | Just (viewTerm -> Lit (Var ly)) <- images, lvarSort lx == lvarSort ly]
         guard (length images == length goodImages)
-        return (v, lvarSort lx, (lx:goodImages))
+        return (v, lvarSort lx, lx:goodImages)
     replaceMapping v fv lv sigma =
-        substFromListVFresh $ (filter ((/=v) . fst) $ substToListVFresh sigma) ++ [(fv, varTerm lv)]
+        substFromListVFresh $ filter ((/= v) . fst) (substToListVFresh sigma) ++ [(fv, varTerm lv)]
 
 -- | If all substitutions @si@ map two variables @x@ and @y@ to identical terms @ti@,
 --   then they all contain the common factor @{x |-> y}@ for a fresh variable @z@
 --   and we can remove @{x |-> ti}@ from all @si@.
 simpIdentify :: MonadFresh m
              => [LNSubstVFresh]
-             -> m (Maybe (Maybe LNSubst, [S.Set LNSubstVFresh]))
+             -> m (Maybe (LNSubst, [LNSubstVFresh]))
 simpIdentify []             = return Nothing
 simpIdentify (subst:others) = case equalImgPairs of
     []         -> return Nothing
@@ -682,8 +710,8 @@ simpIdentify (subst:others) = case equalImgPairs of
                                  Just _  -> (v, v')
                                  Nothing -> error $ "EquationStore.simpIdentify: impossible, variables with incomparable sorts: "
                                                     ++ show v ++" and "++ show v'
-        return $ Just (Just  (substFromList [(vremove, varTerm vkeep)]),
-                       [S.fromList (map (removeMappings [vkeep]) (subst:others))])
+        return $ Just (substFromList [(vremove, varTerm vkeep)],
+                       map (removeMappings [vkeep]) (subst:others))
   where
     equalImgPairs = do
         (v,t)    <- substToListVFresh subst
@@ -697,40 +725,44 @@ simpIdentify (subst:others) = case equalImgPairs of
 
 -- | Simplify by removing substitutions that occur twice in a disjunct.
 --   We could generalize this function by using AC-equality or subsumption.
---   Comment by Philip: that description is not really correct.
---   It rather filters out substitutions with @isContr (= substCreatesNonNormalTerms)@
+--   Comment by Philip: This is not correct
+--   The doubled substitutions are already removed by the set structure. (TODO-SUBTERM extend this to NatSubtermE)
+--   This function removes disjunctions that have @emptySubst@ inside.
+--   Additionally, it filters out substitutions with @isContr (= substCreatesNonNormalTerms)@.
 simpMinimize :: MonadFresh m => (LNSubstVFresh -> Bool) -> StateT EqStore m Bool
 simpMinimize isContr = do
     Conj conj <- gets (L.get eqsConj)
-    list <- return [y | x <- conj, SubstE y <- S.toList $ snd x]
+    let list = concat [getSubsts y | x <- conj, y <- S.toList $ snd x]  --all substitutions in all disjunctions
     if F.any check list
-      then MS.modify (set eqsConj (fmap (second minimize) $ Conj conj)) >> return True
+      then MS.modify (set eqsConj (second minimize <$> Conj conj)) >> return True
       else return False
   where
+    getSubsts :: StoreEntry -> [LNSubstVFresh]
+    getSubsts (SubstE s) = [s]
+    getSubsts (NatSubtermE (_, substs)) = S.toList $ substs
+    getSubsts (SubtermE _) = []
+
     minimize :: S.Set StoreEntry -> S.Set StoreEntry
-    minimize substs
-      | SubstE emptySubstVFresh `S.member` substs = S.singleton (SubstE emptySubstVFresh)
-      | emptyInNat substs                         = S.singleton (SubstE emptySubstVFresh)
-      | otherwise                                 = S.map filterNat $ S.filter (not . myContr) substs
-    emptyInNat :: S.Set StoreEntry -> Bool
-    emptyInNat substs = any (S.member emptySubstVFresh . snd) [y | NatSubtermE y <- S.toList substs]
-    filterNat (NatSubtermE (st, substs)) = NatSubtermE (st, S.filter (not . isContr) substs)
-    filterNat x = x
-    myContr (SubstE x) = isContr x
-    myContr (SubtermE _) = False
-    myContr (NatSubtermE _) = False
+    minimize entries
+      | emptySubstVFresh `elem` concatMap getSubsts entries = S.singleton (SubstE emptySubstVFresh)
+      | otherwise                                           = S.fromList $ concatMap filterContr entries
+    filterContr (NatSubtermE (st, substs)) = [NatSubtermE (st, S.filter (not . isContr) substs)]
+    filterContr (SubstE x) = [SubstE x | not (isContr x)]
+    filterContr x = [x]
     check subst = subst == emptySubstVFresh || isContr subst
 
 
--- | Traverse disjunctions and execute @f@ until it returns
---   @Just (mfreeSubst, disjs)@.
---   Then the @disjs@ is inserted at the current position, if @mfreeSubst@ is
---   @Just freesubst@, then it is applied to the equation store.
+-- | Traverse the disjunctions that do not contain (noNat-)Subterms and execute @f@
+--   until it returns @Just (mfreeSubst, disjs)@.
+--   Then the @disjs@ is inserted at the current position, and @freesubst@ is applied to the equation store.
+--   It is crucial, that @f@ does not change the order of the substitutions.
+--   It should output them (or their modified version) in the exact same order as it got them.
+--   See the description of @zipWithFlattened@ for more details.
 --   @Nothing@ is returned if no modification took place
 --   If @Just splits@ is returned, new split goals have to be inserted at @splits@ (possibly empty)
 foreachDisj :: forall m. MonadFresh m
             => MaudeHandle
-            -> ([LNSubstVFresh] -> m (Maybe (Maybe LNSubst, [S.Set LNSubstVFresh])))
+            -> ([LNSubstVFresh] -> m (Maybe (LNSubst, [LNSubstVFresh])))
             -> StateT EqStore m (Maybe [SplitId])
 foreachDisj hnd f =
     go [] =<< gets (getConj . L.get eqsConj)
@@ -738,22 +770,40 @@ foreachDisj hnd f =
     go :: [(SplitId, S.Set StoreEntry)] -> [(SplitId, S.Set StoreEntry)] -> StateT EqStore m (Maybe [SplitId])
     go _     []               = return Nothing
     go lefts ((idx,d):rights) = do
-        b <- lift $ f ([y | SubstE y <- S.toList d])
+        b <- if not $ null $ [x | SubtermE x <- S.toList d]  --ensures that no (noNat-)Subterms are in this disjunction
+          then return Nothing
+          else lift $ f (flatten $ S.toAscList d)  --toAscList ensures that the order is the same
         case b of
           Nothing              -> go ((idx,d):lefts) rights
           Just (msubst, disjs) -> do
-              eqsConj =: Conj (reverse lefts ++ ((,) idx <$> map (S.map SubstE) disjs) ++ rights)
-              splitIds <- case msubst of
-                Nothing -> return []
-                Just s  -> do
-                   oldStore <- MS.get
-                   (newStore, ids) <- applyEqStore hnd s oldStore
-                   MS.put newStore
-                   return ids
+              let modified = S.fromList $ zipWithFlattened (S.toAscList d) disjs  --toAscList ensures that the order is the same
+              eqsConj =: Conj (reverse lefts ++ [(idx, modified)] ++ rights)
+              oldStore <- MS.get
+              (newStore, splitIds) <- applyEqStore hnd msubst oldStore
+              MS.put newStore
               -- FIXME maybe this is more performant with with modify instead of get -> put
               -- old code (without fresh monad):
               -- maybe (return ()) (\s -> MS.modify (applyEqStore hnd s)) msubst
               return $ Just splitIds
+
+    flatten :: [StoreEntry] -> [LNSubstVFresh]
+    flatten (SubstE s :xs) = s : flatten xs
+    flatten (NatSubtermE (_,substs) :xs) = S.toList substs ++ flatten xs
+    flatten [] = []
+    flatten _ = error "at this stage, there should be no subterms"
+    -- The complication here is that substitutions can also occur in NatSubtermE.
+    -- These substitutions need to be passed to f as well (all together in a flattened list of substitutions).
+    -- The returned list of substitutions should be inserted exactly there where the old substitutions were taken from.
+    -- This is what this function does.
+    -- Especially, the following holds: zipWithFlattened entries (flatten entries) == entries
+    zipWithFlattened :: [StoreEntry] -> [LNSubstVFresh] -> [StoreEntry]
+    zipWithFlattened (SubstE _ :xs) (snew:ys)     = SubstE snew : zipWithFlattened xs ys
+    zipWithFlattened (NatSubtermE (st,ss) :xs) ys = let ll = length ss in
+                                                      NatSubtermE (st, S.fromList (take ll ys))
+                                                      : zipWithFlattened xs (drop ll ys)
+    zipWithFlattened [] []                        = []
+    zipWithFlattened (SubtermE _ : _) _           = error "at this stage, there should be no subterms"
+    zipWithFlattened _ _                          = error "error is zipWithFlattened; read the comment to understand this procedure"
 
 ------------------------------------------------------------------------------
 -- Pretty printing
@@ -782,7 +832,8 @@ prettyEqStore eqs@(EqStore substFree (Conj disjs) _nextSplitId) = vcat $
       , nest 2 $ fsep $ intersperse opLAnd $ map ppEq $ substToListVFresh subst
       ]
     ppEntry (SubtermE (a,b)) = prettyNTerm a $$ nest (6::Int) (opSubterm <-> prettyNTerm b)
-    ppEntry (NatSubtermE ((a,b),_)) = prettyNTerm a $$ nest (6::Int) (opSubterm <-> prettyNTerm b)
+    ppEntry (NatSubtermE ((a,b),substs)) = prettyNTerm a $$ nest (6::Int) (opSubterm <-> prettyNTerm b)
+                                                <-> numbered' (map (ppEntry . SubstE) $ S.toList substs)
 
 
 -- Derived and delayed instances
