@@ -262,8 +262,8 @@ prettyTerm ppLit = ppTerm
 
     ppACOp Mult    = "*"
     ppACOp Xor     = "⊕"
-    ppACOp Union   = "+"
-    ppACOp NatPlus = "++"
+    ppACOp Union   = "++"
+    ppACOp NatPlus = "%+"
     -- Note: User AC symbols are not pretty-printed as infix ops, but we
     -- specify this for completeness in case this changes in the future.
     ppACOp (UserAC sym _) = " `" ++ sym ++ "` "

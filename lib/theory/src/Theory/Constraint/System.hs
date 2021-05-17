@@ -1252,7 +1252,7 @@ alwaysBefore sys =
          ((i, j) `S.member` L.get sLessAtoms sys)
       || (j `S.member` D.reachableSet [i] lessRel)
 
--- | Computes whether there is a cycle @t0 ⊂ x0, ..., tn ⊂ xn@ in @dag@ such that @xi@ are variables and
+-- | Computes whether there is a cycle @t0 ⊏ x0, ..., tn ⊏ xn@ in @dag@ such that @xi@ are variables and
 -- @xi@ is syntactically in @t_i+1@ and not below a cancellation operator
 hasSubtermCycle :: [(LNTerm, LNTerm)] -> Bool
 hasSubtermCycle dag = maybe True (const False) $ foldM visitForest S.empty dag

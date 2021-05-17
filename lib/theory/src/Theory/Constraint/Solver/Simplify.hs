@@ -408,7 +408,7 @@ insertImpliedFormulas = do
           else []
 
 
--- | CR-rule *S_subterm-neg*: @s ⊄ x, t ⊂ x --insert--> s ⊄ t, s ≠ t@
+-- | CR-rule *S_subterm-neg*: @s ¬⊏ x, t ⊏ x --insert--> s ¬⊏ t, s ≠ t@
 negativeSubtermVars :: Reduction ChangeIndicator
 negativeSubtermVars = do
   formulas <- getM sFormulas

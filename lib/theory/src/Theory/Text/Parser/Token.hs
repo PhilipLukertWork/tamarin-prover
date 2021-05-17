@@ -307,11 +307,11 @@ sortedLVar ss =
           LSortPub       -> void $ char '$'
           LSortFresh     -> void $ char '~'
           LSortNode      -> void $ char '#'
-          LSortNat       -> void $ char ':'
+          LSortNat       -> void $ char '%'
           (LSortUser st) -> do
-              void $ char '%'
+              void $ char '?'
               symbol_ st
-              void $ char '%'
+              void $ char '?'
         (n, i) <- indexedIdentifier
         return (LVar n s i)
 
@@ -328,9 +328,9 @@ userSortedLVar =
           else return (LVar n (LSortUser sort) i)
 
     prefixParser = do
-        void $ char '%'
+        void $ char '?'
         sort <- identifier
-        void $ char '%'
+        void $ char '?'
         (n, i) <- indexedIdentifier
         return (LVar n (LSortUser sort) i)
 
@@ -384,13 +384,13 @@ opExp = symbol_ "^"
 opMult :: Parser ()
 opMult = symbol_ "*"
 
--- | The addition operator @++@.
+-- | The addition operator @%+@.
 opPlus :: Parser ()
-opPlus = symbol_ "++"
+opPlus = symbol_ "%+"
 
 -- | The multiset operator @+@.
 opUnion :: Parser ()
-opUnion = symbol_ "+"  --TODO-UNCERTAIN: didn't change this to union
+opUnion = symbol_ "++" <|> symbol_ "+"
 
 -- | The xor operator @XOR@ or @⊕@.
 opXor :: Parser ()
@@ -410,7 +410,7 @@ opEqual = symbol_ "="
 
 -- | The equality operator @=@.
 opSubterm :: Parser ()
-opSubterm = symbol_ "<<" <|> symbol_ "⊂"
+opSubterm = symbol_ "<<" <|> symbol_ "⊏"
 
 -- | The logical-forall operator @All@ or @∀@.
 opForall :: Parser ()
@@ -519,7 +519,7 @@ opSeq = symbol_ ";"
 
 -- | operator for non-deterministic choice in processes
 opNDC :: Parser()
-opNDC = symbol_ "+"
+opNDC = symbol_ "+"  --TODO-PARSER
 
 -- | Operator for 0-process (terminator of sequence)
 opNull :: Parser()

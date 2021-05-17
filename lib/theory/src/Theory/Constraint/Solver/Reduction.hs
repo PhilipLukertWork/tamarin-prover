@@ -457,20 +457,20 @@ insertFormula = do
               markAsSolved
               insert False (GAto (Subterm j (i ++: fAppNatOne)))
 ----------------------------------- these two rules are performance improvements that might rather go into partialAtomValuation in Simplify.hs -----------------------------------
-          -- mark i ⊄ i as solved
+          -- mark i ¬⊏ i as solved
 --          GGuarded All [] [Subterm i j] gf | gf == gfalse
 --                                           && i == j -> do
 --              markAsSolved
 
-          -- mark i ⊄ j as solved if j is a variable that occurs in i and i≠j
+          -- mark i ¬⊏ j as solved if j is a variable that occurs in i and i≠j
 --          GGuarded All [] [Subterm i j] gf | gf == gfalse  -- i≠j is ensured by the previous case
 --                                           && maybe False  -- j needs to be a variable
 --                                              (\v -> Var v `elem` bTermToLTerm i) -- j is in i
 --                                              (getVar $ bTermToLTerm j) -> do
 --              markAsSolved
 --              if i == j then
---                return ()  -- with i==j the term i⊄j always holds
---                else insert False gfalse  -- if j is in i then the term i⊄j always holds FIXME maybe move this to Contradictions.hs ?
+--                return ()  -- with i==j the term i ¬⊏ j always holds
+--                else insert False gfalse  -- if j is in i then the term i ¬⊏ j always holds FIXME maybe move this to Contradictions.hs ?
 
           -- CR-rule *S_subterm-neg-notneg*
           GGuarded All [] [Subterm _ j] gf | gf == gfalse

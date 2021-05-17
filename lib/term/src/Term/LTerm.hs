@@ -193,8 +193,8 @@ sortPrefix LSortMsg       = ""
 sortPrefix LSortFresh     = "~"
 sortPrefix LSortPub       = "$"
 sortPrefix LSortNode      = "#"
-sortPrefix LSortNat       = ":"
-sortPrefix (LSortUser st) = "%" ++ st ++ "%"
+sortPrefix LSortNat       = "%"
+sortPrefix (LSortUser st) = "?" ++ st ++ "?"
 --TODO-MY add LSortNum
 
 -- | @sortSuffix s@ is the suffix we use for annotating variables of sort @s@.
@@ -237,7 +237,7 @@ instance Show Name where
   show (Name FreshName  n) = "~'" ++ show n ++ "'"  --TODO-MY-NONUM use sortPrefix
   show (Name PubName    n) = "'"  ++ show n ++ "'"
   show (Name NodeName   n) = "#'" ++ show n ++ "'"
-  show (Name NatName   n) = ":'" ++ show n ++ "'"
+  show (Name NatName   n) = "%'" ++ show n ++ "'"
 --TODO-MY add NumName
 
 instance Show NameId where

@@ -281,6 +281,7 @@ term plit eqn = asum
     [ pairing       <?> "pairs"
     , parens (msetterm eqn plit)
     , symbol "1:nat" *> pure fAppNatOne
+    , symbol "%1"    *> pure fAppNatOne
     , symbol "1"     *> pure fAppOne
     , application   <?> "function application"
     , nullaryApp
