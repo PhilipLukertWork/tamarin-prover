@@ -495,7 +495,7 @@ simpDisjunction hnd isContr disj0 = do
 simp :: MonadFresh m => MaudeHandle -> (LNSubst -> LNSubstVFresh -> Bool) -> EqStore -> m (EqStore, [SplitId])
 simp hnd isContr eqStore = do
     (store1, splitIds) <- liftM swap $ runStateT (loopSimp1 []) eqStore
-    invalid <- hasInvalidNatChain hnd store1  -- after simplification, check wether there is an invalid chain TODO-SUBTERM move this to simp1?
+    invalid <- hasInvalidNatChain hnd store1  -- after simplification, check wether there is an invalid chain TODO-SUBTERM move this to contradictions?
     return $ if invalid
       then (contradictoryEqStore, [])
       else (store1, splitIds)
@@ -522,6 +522,7 @@ simp1 hnd isContr = do
           b2 <- simpRemoveRenamings
           b3 <- simpEmptyNat
           b4 <- simpEmptyDisj
+          b5 <- simpIdentical
           let ids1 = [Just [] | b1 || b2 || b3 || b4]
           ids2 <- (: ids1) <$> simpSingleton hnd
           ids3 <- (: ids2) <$> foreachDisj hnd simpAbstractSortedVar
@@ -600,6 +601,23 @@ simpSingleton hnd = go [] =<< gets (getConj . L.get eqsConj)
                                                _   -> Nothing
     getSingletonSubst _ = Nothing
 
+-- | Filter out identical substitutions
+--   which are not covered by the set data structure because they are split in NatSubtermE and SubstE.
+--   Then, the one in SubstE can be removed.
+--   If we would remove the one in NatSubtermE, we might loose the subterm information which makes the prover slower.
+simpIdentical :: forall m. MonadFresh m => StateT EqStore m Bool
+simpIdentical = go [] =<< gets (getConj . L.get eqsConj)
+  where
+    go :: [(SplitId, S.Set StoreEntry)] -> [(SplitId, S.Set StoreEntry)] -> StateT EqStore m Bool
+    go _     []               = return False
+    go lefts ((idx,d):rights) = do
+      -- newD is d without any SubstE of which the substitution appears in a NatSubtermE
+      let newD = d `S.difference` S.map SubstE (S.unions [x | NatSubtermE (_, x) <- S.toList d])
+      if S.size d == S.size newD then
+        go ((idx,d):lefts) rights
+      else do
+        eqsConj =: Conj (reverse lefts ++ ((idx,newD):rights))
+        return True
 
 -- | If all substitutions @si@ map a variable @v@ to terms with the same
 --   outermost function symbol @f@, then they all contain the common factor
