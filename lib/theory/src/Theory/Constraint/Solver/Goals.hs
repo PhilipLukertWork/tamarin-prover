@@ -380,7 +380,8 @@ solveSplit :: SplitId -> Reduction String
 solveSplit x = do
     split <- gets ((`performSplit` x) . get sEqStore)
     let errMsg = error "solveSplit: inexistent split-id"
-    store         <- maybe errMsg disjunctionOfList split
+    (store, idx)  <- maybe errMsg disjunctionOfList split
+    insertGoal (SplitG idx) False 
     -- FIXME: Simplify this interaction with the equation store
     hnd           <- getMaudeHandle
     substCheck    <- gets (substCreatesNonNormalTerms hnd)

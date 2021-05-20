@@ -231,10 +231,11 @@ falseDisj = S.empty
 ----------------------------------------------------------------------
 
 -- | Returns the list of all @SplitId@s valid for the given equation store
--- sorted by the size of the disjunctions.
+-- sorted by the size of the disjunctions. note: not used
 splits :: EqStore -> [SplitId]
-splits eqs = map fst $ nub $ sortOn snd
-    [ (idx, S.size conj) | (idx, conj) <- getConj $ L.get eqsConj eqs ]
+splits eqs = map fst (nub $ sortOn snd
+    [ (idx, S.size conj) | (idx, conj) <- getConj $ L.get eqsConj eqs ])
+    \\ onlySingleSubtermSplits eqs
     
 -- | Returns the list of @SplitId@s where the set of storeEntries is a singleton and @SubtermE@
 -- This is used for finding new Split Goals that arise if these singletons are expanded 
@@ -245,7 +246,8 @@ onlySingleSubtermSplits eqs = [ idx | (idx, [SubtermE _]) <- map (second S.toLis
 
 -- | Returns 'True' if the 'SplitId' is valid.
 splitExists :: EqStore -> SplitId -> Bool
-splitExists eqs = isJust . splitSize eqs
+splitExists eqs idx = isJust (splitSize eqs idx)
+                        && idx `notElem` onlySingleSubtermSplits eqs
 
 -- | Returns the number of cases for a given 'SplitId'.
 splitSize :: EqStore -> SplitId -> Maybe Int
@@ -276,17 +278,26 @@ addDisj eqStore disj =
 
 -- | @performSplit eqs i@ performs a case-split on the first disjunction
 -- with the given 'SplitId'.
-performSplit :: EqStore -> SplitId -> Maybe [EqStore]  --TODO-SUBTERM care for subterm predicates
+performSplit :: EqStore -> SplitId -> Maybe [(EqStore, SplitId)]
 performSplit eqStore idx =
     case break ((idx ==) . fst) (getConj $ L.get eqsConj eqStore) of
         (_, [])                   -> Nothing
-        (before, (_, disj):after) -> Just $
-            mkNewEqStore before after <$> case S.toList disj of
-              [NatSubtermE (_, innerDisj)] -> map SubstE $ S.toList innerDisj
-              normalDisj                   -> normalDisj  --TODO-SUBTERM do we forget to add split-goals for NatSubtermE here?
+        (before, (_, disj):after) -> case S.toList disj of
+          [SubtermE _] -> Nothing  -- if it is just a subterm, it cannot be split
+          disjList -> Just $ mkNewEqStore before after <$> case disjList of
+              [NatSubtermE (_, innerDisj)] -> map (S.singleton . SubstE) $ S.toList innerDisj
+              normalDisj | null [True | SubtermE _ <- normalDisj]  -- no Subterm present -> split normally
+                                           -> map S.singleton normalDisj
+              normalDisj                   -> splitSubterms normalDisj [] S.empty  -- Subterm present -> split only subterms
   where
-    mkNewEqStore before after subst =
-        fst $ addEntries (set eqsConj (Conj (before ++ after)) eqStore) (S.singleton subst)
+    mkNewEqStore before after entries =
+        addEntries (set eqsConj (Conj (before ++ after)) eqStore) entries
+
+    splitSubterms :: [StoreEntry] -> [S.Set StoreEntry] -> S.Set StoreEntry -> [S.Set StoreEntry]
+    splitSubterms ((SubtermE st) : rest) accList acc = splitSubterms rest (S.singleton (SubtermE st) : accList) acc
+    splitSubterms (substOrNat : rest)    accList acc = splitSubterms rest accList (substOrNat `S.insert` acc)
+    splitSubterms []                     accList acc = acc : accList
+
 
 addEqs :: MonadFresh m
        => MaudeHandle -> [Equal LNTerm] -> EqStore -> m (EqStore, Maybe SplitId, [SplitId])
@@ -324,7 +335,10 @@ addSubterm :: MonadFresh m => MaudeHandle -> (LNTerm, LNTerm) -> EqStore -> m (E
 addSubterm hnd st eqStore = do
     entries <- recurseSubterms hnd (SubtermE st)
     let (finalStore, splitId) = addEntries eqStore (S.fromList entries)
-    return (finalStore, Just splitId)
+    return $ if splitExists finalStore splitId then
+        (finalStore, Just splitId)
+      else
+        (finalStore, Nothing)
 
 -- | apply CR-rules S_subterm-ac-recurse and S_subterm-recurse iteratively while applying S_invalid in each step
 recurseSubterms :: MonadFresh m => MaudeHandle -> StoreEntry -> m [StoreEntry] 
@@ -344,7 +358,7 @@ recurseSubterms hnd = recurse
          do
            splittedNatSubsts <- acSubtermUnif NatPlus small big
            return $ Just [ NatSubtermE ((small, big), S.fromList splittedNatSubsts) ]
-       else case (viewTerm big) of
+       else case viewTerm big of
          Lit (Con _) -> return $ Just []  -- nothing can be a strict subterm of a constant
          Lit (Var v) -> if Var v `elem` small ||  -- cannot be satisfied (shorthand for rule S_subterm-chain) TODO-SUBTERM replace "elem" by "elem-and-not-below-cancellation"
                            isPubVar big ||  -- CR-rule S_invalid  (atomicity of pub)
@@ -383,14 +397,14 @@ recurseSubterms hnd = recurse
 --   These splitGoals are then returned in a list (along with the changed EqStore)
 applyEqStore :: MonadFresh m => MaudeHandle -> LNSubst -> EqStore -> m (EqStore, [SplitId])
 applyEqStore hnd asubst eqStore
-    | dom asubst `intersect` varsRange asubst /= [] || trace (show ("applyEqStore", asubst, eqStore)) False
+    | dom asubst `intersect` varsRange asubst /= [] --- || trace (show ("applyEqStore", asubst, eqStore)) False
     = error $ "applyEqStore: dom and vrange not disjoint for `"++show asubst++"'"
     | otherwise
     = do 
       newConjs <- mapM modifyOneConj $ L.get eqsConj eqStore
       let newEqStore = EqStore newsubst newConjs $ L.get eqsNextSplitId eqStore
-      let newSplitGoals = filter (\x -> notElem x $ onlySingleSubtermSplits eqStore) $ onlySingleSubtermSplits newEqStore
-      return $ (newEqStore, newSplitGoals)  --TODO-SUBTERM: add right split ids (expanded singleton-subterms)
+      let newSplitGoals = onlySingleSubtermSplits newEqStore \\ onlySingleSubtermSplits eqStore
+      return $ (newEqStore, newSplitGoals)
     -- FIXME maybe this is more performant with modify and second instead of making a new EqStore
     -- old code (without fresh monad):
     -- modify eqsConj (fmap (second (S.fromList . concatMap applyBound . S.toList))) $
@@ -523,14 +537,13 @@ simp1 hnd isContr = do
           b3 <- simpEmptyNat
           b4 <- simpEmptyDisj
           b5 <- simpIdentical
-          let ids1 = [Just [] | b1 || b2 || b3 || b4]
+          let ids1 = [Just [] | b1 || b2 || b3 || b4 || b5]
           ids2 <- (: ids1) <$> simpSingleton hnd
           ids3 <- (: ids2) <$> foreachDisj hnd simpAbstractSortedVar
           ids4 <- (: ids3) <$> foreachDisj hnd simpIdentify
           ids5 <- (: ids4) <$> foreachDisj hnd simpAbstractFun
           ids6 <- (: ids5) <$> foreachDisj hnd simpAbstractName
-          trace (show ("simp:", [b1, b2, b3, b4], ids6)) $
-            return $ if all isNothing ids6 then Nothing else (Just . concat . catMaybes) ids6
+          return $ if all isNothing ids6 then Nothing else (Just . concat . catMaybes) ids6
 
 
 -- | Remove variable renamings in fresh substitutions.
@@ -613,11 +626,10 @@ simpIdentical = go [] =<< gets (getConj . L.get eqsConj)
     go lefts ((idx,d):rights) = do
       -- newD is d without any SubstE of which the substitution appears in a NatSubtermE
       let newD = d `S.difference` S.map SubstE (S.unions [x | NatSubtermE (_, x) <- S.toList d])
-      if S.size d == S.size newD then
-        go ((idx,d):lefts) rights
-      else do
-        eqsConj =: Conj (reverse lefts ++ ((idx,newD):rights))
-        return True
+      (if S.size d == S.size newD then
+        go ((idx, d) : lefts) rights
+       else
+        eqsConj =: Conj (reverse lefts ++ [(idx, newD)] ++ rights) >> return True)
 
 -- | If all substitutions @si@ map a variable @v@ to terms with the same
 --   outermost function symbol @f@, then they all contain the common factor
@@ -744,7 +756,7 @@ simpIdentify (subst:others) = case equalImgPairs of
 -- | Simplify by removing substitutions that occur twice in a disjunct.
 --   We could generalize this function by using AC-equality or subsumption.
 --   Comment by Philip: This is not correct
---   The doubled substitutions are already removed by the set structure. (TODO-SUBTERM extend this to NatSubtermE)
+--   The doubled substitutions are already removed by the set structure and @simpIdentical@.
 --   This function removes disjunctions that have @emptySubst@ inside.
 --   Additionally, it filters out substitutions with @isContr (= substCreatesNonNormalTerms)@.
 simpMinimize :: MonadFresh m => (LNSubstVFresh -> Bool) -> StateT EqStore m Bool

@@ -398,7 +398,7 @@ insertLast i = do
 insertAtom :: LNAtom -> Reduction ChangeIndicator
 insertAtom ato = case ato of
     EqE x y       -> solveTermEqs SplitNow [Equal x y]
-    Subterm x y   -> solveSubtermEq SplitLater (x, y)
+    Subterm x y   -> solveSubtermEq SplitLater (x, y)  --currently, SplitNow is not used at all. One could experiment...
     Action i fa   -> insertAction (ltermNodeId' i) fa
     Less i j      -> do insertLess (ltermNodeId' i) (ltermNodeId' j)
                         return Unchanged  --TODO why is this Unchanged?
@@ -768,9 +768,12 @@ solveTermEqs splitStrat eqs0 =
         se  <- gets id
         (eqs2, maySplitId, splitGoals) <- addEqs hnd eqs1 =<< getM sEqStore
         eqs3 <- case (maySplitId, splitStrat) of
-                  (Just splitId, SplitNow) -> disjunctionOfList
-                                                $ fromJustNote "solveTermEqs"
-                                                $ performSplit eqs2 splitId
+                  (Just splitId, SplitNow) -> do
+                      (eqs, idx) <- disjunctionOfList
+                        $ fromJustNote "solveTermEqs"
+                        $ performSplit eqs2 splitId
+                      insertGoal (SplitG idx) False
+                      return eqs
                   (Just splitId, SplitLater) -> do
                       insertGoal (SplitG splitId) False
                       return eqs2
@@ -783,15 +786,22 @@ solveTermEqs splitStrat eqs0 =
 
 -- | Similar to solveTermEqs but inserts a (single) Subterm predicate instead of a set of equations
 solveSubtermEq :: SplitStrategy -> (LNTerm, LNTerm) -> Reduction ChangeIndicator
-solveSubtermEq splitStrat st = do
+solveSubtermEq splitStrat (small, big) = do
     hnd <- getMaudeHandle
     se  <- gets id
     origStore <- getM sEqStore
-    (store, maySplitId) <- addSubterm hnd st origStore
+    (store, maySplitId) <- addSubterm hnd (small, big) origStore
     store2 <- case (maySplitId, splitStrat) of
-       (Just splitId, SplitNow) -> disjunctionOfList $ fromJustNote "solveSubtermEq" $ performSplit store splitId
-       (Just splitId, SplitLater) -> insertGoal (SplitG splitId) False >> return store
-       _ -> return origStore  -- nothing changes
+       --alternative split strategy would be: split later if it's NatSubtermE, split now if it's SubtermE
+       (Just splitId, SplitLater) -- || sortOfLNTerm small == LSortNat && sortOfLNTerm big == LSortNat
+            -> insertGoal (SplitG splitId) False >> return store
+       (Just splitId, SplitNow) -> do
+            (eqs, idx) <- disjunctionOfList
+              $ fromJustNote "solveSubtermEq"
+              $ performSplit store splitId
+            insertGoal (SplitG idx) False
+            return eqs
+       _ -> return store  -- no new split
     (store3, splitGoals) <- simp hnd (substCreatesNonNormalTerms hnd se) store2
     setM sEqStore store3
     mapM_ (flip insertGoal False . SplitG) splitGoals
