@@ -293,8 +293,7 @@ reduceFormulas = do
     formulas  <- S.toList <$> getM sFormulas
     changedList <- mapM (\fm -> do
         modM sFormulas $ S.delete fm
-        x <- insertFormula fm
-        return $ trace (show ("reduceFormulas fm changed", fm, x))  x
+        insertFormula fm
       ) formulas
     return $ if Changed `elem` changedList then Changed else Unchanged
 

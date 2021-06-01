@@ -462,10 +462,10 @@ insertFormula = do
               deconstructed <- splitSubterm (reducibleFunSyms $ mhMaudeSig hnd) st
               unless (deconstructed == [SubtermD st]) markAsSolved  -- if the equality holds, just insert the formula and return
               let lb = lTermToBTerm
-              mapM_ (\destr -> trace (show ("insertingDeconstructed", destr)) $ case destr of
+              mapM_ (\destr -> case destr of
                   TrueD                     -> void $ insert False gfalse
                   (SubtermD (s,t))          -> modM sFormulas (S.insert $ gnotAtom $ Subterm (lb s) (lb t))
-                  (NatSubtermD (s, _, t))   -> trace (show ("insertingNatSubterm", lb t, lb s)) $ void $ insert False (GAto (Subterm (lb t) ((lb s) ++: fAppNatOne)))  --change to t<s ∨ t=s
+                  (NatSubtermD (s, _, t))   -> void $ insert False (GAto (Subterm (lb t) ((lb s) ++: fAppNatOne)))  --change to t<s ∨ t=s
                   (EqualD (a,b))            -> modM sFormulas (S.insert $ gnotAtom $ EqE (lb a) (lb b))
                   (EqualDNewVar ((a,b), _)) -> modM sFormulas (S.insert $ gnotAtom $ EqE (lb a) (lb b))  --TODO - add existential quantifier here!
                 ) deconstructed
@@ -722,7 +722,7 @@ solveTermEqs splitStrat eqs0 =
 
 -- | Similar to solveTermEqs but inserts a (single) Subterm predicate instead of a set of equations
 solveSubtermEq :: SplitStrategy -> (LNTerm, LNTerm) -> Reduction ChangeIndicator
-solveSubtermEq splitStrat (small, big) = trace ( show ("solveSubtermEq", small, big)) $ do
+solveSubtermEq splitStrat (small, big) = do
     hnd <- getMaudeHandle
     se  <- gets id
     origStore <- getM sEqStore
@@ -738,8 +738,8 @@ solveSubtermEq splitStrat (small, big) = trace ( show ("solveSubtermEq", small, 
             insertGoal (SplitG idx) False
             return eqs
        _ -> return store  -- no new split
-    (store3, splitGoals) <- simp hnd (substCreatesNonNormalTerms hnd se) $ trace (show ("store2", store2)) store2
-    setM sEqStore $ trace (show ("store3", store3)) store3
+    (store3, splitGoals) <- simp hnd (substCreatesNonNormalTerms hnd se) store2
+    setM sEqStore store3
     mapM_ (flip insertGoal False . SplitG) splitGoals
     noContradictoryEqStore
     return $ case maySplitId of

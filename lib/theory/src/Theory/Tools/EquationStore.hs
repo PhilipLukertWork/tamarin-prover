@@ -334,7 +334,7 @@ addEqs hnd eqs0 eqStore =
 addSubterm :: MonadFresh m => MaudeHandle -> (LNTerm, LNTerm) -> EqStore -> m (EqStore, Maybe SplitId)
 addSubterm hnd st eqStore = do
     entries <- recurseSubterms hnd st
-    let (finalStore, splitId) = addEntries eqStore $ trace (show ("addSubterm entries", st, entries)) entries
+    let (finalStore, splitId) = addEntries eqStore entries
     return $ if splitExists finalStore splitId then
         (finalStore, Just splitId)
       else
@@ -351,7 +351,7 @@ recurseSubterms hnd subterm = do
     toStoreEntry :: SubtermSplit -> [StoreEntry]
     toStoreEntry TrueD                          = [SubstE emptySubstVFresh]
     toStoreEntry (SubtermD st)                  = [SubtermE st]
-    toStoreEntry (NatSubtermD (s, sPlus, t))    = trace (show ("recurseSubterms nat s sPlus t", s, sPlus, t)) [NatSubtermE ((s,t), S.fromList $ getUnifiers (Equal sPlus t))]
+    toStoreEntry (NatSubtermD (s, sPlus, t))    = [NatSubtermE ((s,t), S.fromList $ getUnifiers (Equal sPlus t))]
     toStoreEntry (EqualD (a,b))                 = map SubstE $ getUnifiers (Equal a b)
     toStoreEntry (EqualDNewVar ((a,b), newVar)) = map SubstE unifWithoutNewVar
                                               where
