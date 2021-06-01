@@ -321,7 +321,7 @@ addEqs hnd eqs0 eqStore =
                         <$> simpDisjunction hnd (const False) (Disj substs)
             -}
   where
-    eqs = apply (L.get eqsSubst eqStore) $ trace (unlines ["addEqs: ", show eqs0]) $ eqs0
+    eqs = apply (L.get eqsSubst eqStore) eqs0 --- $ trace (unlines ["addEqs: ", show eqs0]) $ eqs0
     {-
     addEqsAC eqSt (sfree, Nothing)   = [ applyEqStore hnd sfree eqSt ]
     addEqsAC eqSt (sfree, Just disj) =
@@ -333,17 +333,38 @@ addEqs hnd eqs0 eqStore =
 --   Returns the split identifier of the disjunction in resulting equation store.
 addSubterm :: MonadFresh m => MaudeHandle -> (LNTerm, LNTerm) -> EqStore -> m (EqStore, Maybe SplitId)
 addSubterm hnd st eqStore = do
-    entries <- recurseSubterms hnd (SubtermE st)
-    let (finalStore, splitId) = addEntries eqStore (S.fromList entries)
+    entries <- recurseSubterms hnd st
+    let (finalStore, splitId) = addEntries eqStore $ trace (show ("addSubterm entries", st, entries)) entries
     return $ if splitExists finalStore splitId then
         (finalStore, Just splitId)
       else
         (finalStore, Nothing)
 
 -- | apply CR-rules S_subterm-ac-recurse and S_subterm-recurse iteratively while applying S_invalid in each step
-recurseSubterms :: MonadFresh m => MaudeHandle -> StoreEntry -> m [StoreEntry] 
-recurseSubterms hnd = recurse
+recurseSubterms :: MonadFresh m => MaudeHandle -> (LNTerm, LNTerm) -> m (S.Set StoreEntry)
+recurseSubterms hnd subterm = do
+    deconstructed <- splitSubterm reducible subterm
+    return $ S.fromList $ concatMap toStoreEntry deconstructed
   where
+    reducible = reducibleFunSyms $ mhMaudeSig hnd
+
+    toStoreEntry :: SubtermSplit -> [StoreEntry]
+    toStoreEntry TrueD                          = [SubstE emptySubstVFresh]
+    toStoreEntry (SubtermD st)                  = [SubtermE st]
+    toStoreEntry (NatSubtermD (s, sPlus, t))    = trace (show ("recurseSubterms nat s sPlus t", s, sPlus, t)) [NatSubtermE ((s,t), S.fromList $ getUnifiers (Equal sPlus t))]
+    toStoreEntry (EqualD (a,b))                 = map SubstE $ getUnifiers (Equal a b)
+    toStoreEntry (EqualDNewVar ((a,b), newVar)) = map SubstE unifWithoutNewVar
+                                              where
+                                                unif = getUnifiers (Equal a b)
+                                                filterDomain = [x | x <- concatMap domVFresh unif, x /= newVar]
+                                                unifWithoutNewVar = map (restrictVFresh filterDomain) unif
+
+    getUnifiers :: Equal LNTerm -> [LNSubstVFresh]
+    getUnifiers eq = unifyLNTerm [eq] `runReader` hnd
+
+    {-  -- old code
+    redElem = elemNotBelowReducible reducible
+
     recurse :: MonadFresh m => StoreEntry -> m [StoreEntry]
     recurse entry = do
       res <- step entry
@@ -351,29 +372,38 @@ recurseSubterms hnd = recurse
         Just entries -> liftM concat (mapM recurse entries)
         Nothing -> return [entry]
 
-    -- outputs Nothing if the recursion is supposed to end (i.e. nothing changes)
+    -- outputs Nothing if the recursion is supposed to end (and the current term should be inserted into the disjunction)
+    -- outputs Just [] if the current term should not be inserted into the disjunction
+    -- outputs Just list if the current term should not be inserted into the disjunction and all list elements should be recursed
     step :: MonadFresh m => StoreEntry -> m (Maybe [StoreEntry])
-    step (SubtermE (small, big)) =
-       if sortOfLNTerm small == LSortNat && sortOfLNTerm big == LSortNat then  -- CR-rule S_nat (delayed)
-         do
-           splittedNatSubsts <- acSubtermUnif NatPlus small big
-           return $ Just [ NatSubtermE ((small, big), S.fromList splittedNatSubsts) ]
-       else case viewTerm big of
-         Lit (Con _) -> return $ Just []  -- nothing can be a strict subterm of a constant
-         Lit (Var v) -> if Var v `elem` small ||  -- cannot be satisfied (shorthand for rule S_subterm-chain) TODO-SUBTERM replace "elem" by "elem-and-not-below-cancellation"
-                           isPubVar big ||  -- CR-rule S_invalid  (atomicity of pub)
-                           isFreshVar big ||  -- CR-rule S_invalid  (atomicity of fresh)
-                           (isNatVar big && sortOfLNTerm small /= LSortNat)  -- CR-rule S_invalid  (no function no-nat -> nat exists)
-                        then return $ Just []  -- insert bottom ⊥
-                        else return $ Nothing  -- do not recurse further; leave the subterm as is
-         FApp (AC f) _ -> do  -- apply CR-rule subterm-ac-recurse  TODO-SUBTERM check whether we need to exclude cancellation operators like XOR (in this case, return Nothing)
-           acSpecial <- acSubtermUnif f small big
-           return $ Just $ (concatMap (eqOrSubterm small) (flattenedACTerms f big)) ++ map SubstE acSpecial
-         FApp (NoEq _) ts -> return $ Just $ concatMap (eqOrSubterm small) ts  -- apply CR-rule subterm-recurse  TODO-SUBTERM exclude cancellation operators
-         FApp (C _) _ -> return Nothing  -- we treat commutative but not associative symbols as cancellation operators
-         FApp List _ -> return Nothing  -- list seems to be unused (?)
-    step (SubstE _) = return Nothing
-    step (NatSubtermE _) = return Nothing
+    step (SubtermE (small, big))
+       | sortOfLNTerm small == LSortNat && sortOfLNTerm big == LSortNat = do  -- CR-rule S_nat (delayed)
+         splittedNatSubsts <- acSubtermUnif NatPlus small big
+         return $ Just [ NatSubtermE ((small, big), S.fromList splittedNatSubsts) ]
+       | big `redElem` small && big /= small =
+         return $ Just []
+    step (SubtermE (_, viewTerm -> Lit (Con _))) =  -- nothing can be a strict subterm of a constant
+         return $ Just []  -- insert bottom
+    step (SubtermE (small, big@(viewTerm -> Lit (Var _))))
+       | isPubVar big || isFreshVar big || (isNatVar big && sortOfLNTerm small /= LSortNat) =  -- CR-rule S_invalid
+         return $ Just []  -- insert bottom
+    step (SubtermE (_, viewTerm -> Lit (Var _))) =  -- variable: do not recurse further
+         return Nothing  -- leave subterm as is
+    step (SubtermE (small, big@(viewTerm -> FApp (AC f) _)))  -- apply CR-rule subterm-ac-recurse
+       | AC f `S.notMember` reducible = do
+         acSpecial <- acSubtermUnif f small big
+         return $ Just $ map SubstE acSpecial ++ concatMap (eqOrSubterm small) (flattenedACTerms f big)
+    step (SubtermE (small, viewTerm -> FApp (NoEq f) ts))  -- apply CR-rule subterm-ac-recurse
+       | NoEq f `S.notMember` reducible = do
+         return $ Just $ concatMap (eqOrSubterm small) ts
+    step (SubtermE (_, viewTerm -> FApp (C _) _)) =  -- we treat commutative but not associative symbols as reducible functions
+         return Nothing
+    step (SubtermE (_, viewTerm -> FApp List _)) =  -- list seems to be unused (?)
+         return Nothing
+    step (SubtermE _) =  -- reducible function symbol observed (when applying subterm-[ac-]recurse)
+         return Nothing
+    step _ =             -- SubstE or NatSubtermE
+         return Nothing
 
     -- returns the unifiers of @small + newVar = big@
     acSubtermUnif :: MonadFresh m => ACSym -> LNTerm -> LNTerm -> m [LNSubstVFresh]
@@ -387,9 +417,10 @@ recurseSubterms hnd = recurse
 
     eqOrSubterm :: LNTerm -> LNTerm -> [StoreEntry]
     eqOrSubterm small t = SubtermE (small, t) : map SubstE (getUnifiers (Equal small t))  -- the unifiers for the equation
+    -}
 
-    getUnifiers :: Equal LNTerm -> [LNSubstVFresh]
-    getUnifiers eq = unifyLNTerm [eq] `runReader` hnd
+
+
 
 -- | Apply a substitution to an equation store and bring resulting equations into
 --   normal form again by using unification. The application can "reactivate" subterm constraints.
@@ -418,10 +449,10 @@ applyEqStore hnd asubst eqStore
     newsubst = asubst `compose` L.get eqsSubst eqStore
     
     applyBound :: MonadFresh m => StoreEntry -> m [StoreEntry]
-    applyBound (SubstE s) = liftM (map SubstE) (applyBoundSubst s)
-    applyBound (SubtermE (small, big)) = recurseSubterms hnd $ SubtermE (apply newsubst small, apply newsubst big)
+    applyBound (SubstE s) = map SubstE <$> applyBoundSubst s
+    applyBound (SubtermE (small, big)) = S.toList <$> recurseSubterms hnd (apply newsubst small, apply newsubst big)
     applyBound (NatSubtermE ((small, big), substs)) = do
-      mappedSubsts <- liftM (concat) (mapM applyBoundSubst (S.toList substs))
+      mappedSubsts <- concat <$> mapM applyBoundSubst (S.toList substs)
       return $ [NatSubtermE ((apply newsubst small, apply newsubst big), S.fromList mappedSubsts)]
     applyBoundSubst :: MonadFresh m => LNSubstVFresh -> m [LNSubstVFresh]
     applyBoundSubst s = return $ map (restrictVFresh (varsRange newsubst ++ domVFresh s)) $
@@ -575,7 +606,7 @@ simpEmptyNat = do
       else return False
     where
       isEmptyNat :: StoreEntry -> Bool
-      isEmptyNat (NatSubtermE (st, substs)) = trace (show st ++ show substs) substs == S.empty
+      isEmptyNat (NatSubtermE (_, substs)) = substs == S.empty
       isEmptyNat _ = False
 
 -- | If empty disjunction is found, the whole conjunct

@@ -44,6 +44,7 @@ module Term.Term (
 
     -- ** "Protected" subterms
     , allProtSubterms
+    , elemNotBelowReducible
 
     -- * AC, C, and NonAC funcion symbols
     , FunSym(..)
@@ -98,6 +99,7 @@ module Term.Term (
 -- import           Data.Monoid
 -- import           Data.Foldable (foldMap)
 
+import qualified Data.Set as S
 import qualified Data.ByteString.Char8 as BC
 import           Extension.Data.ByteString ()
 
@@ -219,14 +221,24 @@ getRightTerm t = getSide DiffRight t
 -- NB: here anything but a pair or an AC symbol is protected!
 ----------------------------------------------------------------------
 
--- Given a term, compute all protected subterms, i.e. all terms
+-- | Given a term, compute all protected subterms, i.e. all terms
 -- which top symbol is a function, but not a pair, nor an AC symbol
 allProtSubterms :: Show a => Term a -> [Term a]
 allProtSubterms t@(viewTerm -> FApp _ as) | isPair t || isAC t
-        = concatMap allProtSubterms as
-allProtSubterms t@(viewTerm -> FApp _ as) | otherwise
-        = t:concatMap allProtSubterms as
-allProtSubterms _                                     = []
+                  = concatMap allProtSubterms as
+allProtSubterms t@(viewTerm -> FApp _ as)
+                  = t:concatMap allProtSubterms as
+allProtSubterms _ = []
+
+-- | Is term @inner@ in term @outer@ and not below a reducible function symbol?
+-- This is used for the Subterm relation
+elemNotBelowReducible :: Eq a => FunSig -> Term a -> Term a -> Bool
+elemNotBelowReducible _ inner outer
+                      | inner == outer = True
+elemNotBelowReducible reducible inner (viewTerm -> FApp f as)
+                      | f `S.notMember` reducible
+                            = any (elemNotBelowReducible reducible inner) as
+elemNotBelowReducible _ _ _ = False
 
 ----------------------------------------------------------------------
 -- Pretty printing

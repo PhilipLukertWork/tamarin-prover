@@ -209,7 +209,7 @@ import qualified Data.ByteString.Char8                as BC
 import qualified Data.DAG.Simple                      as D
 import           Data.List                            (foldl', partition, intersect)
 import qualified Data.Map                             as M
-import           Data.Maybe                           (fromMaybe,mapMaybe)
+import           Data.Maybe                           (fromMaybe,mapMaybe,isNothing)
 -- import           Data.Monoid                          (Monoid(..))
 import qualified Data.Monoid                             as Mono
 import qualified Data.Set                             as S
@@ -681,6 +681,7 @@ safePartialAtomValuation ctxt sys =
     before     = alwaysBefore sys
     lessRel    = rawLessRel sys
     nodesAfter = \i -> filter (i /=) $ S.toList $ D.reachableSet [i] lessRel
+    redElem    = elemNotBelowReducible (reducibleFunSyms $ mhMaudeSig $ L.get pcMaudeHandle ctxt)
 
     -- | 'True' iff there in every solution to the system the two node-ids are
     -- instantiated to a different index *in* the trace.
@@ -719,12 +720,9 @@ safePartialAtomValuation ctxt sys =
                   _                                 -> Nothing
 
           Subterm small big
-             | small == big                         -> Just False
-             | maybe False  -- big needs to be a variable
-                 (\v -> Var v `elem` small) -- big is in small  --TODO-SUBTERM care for cancellation operators!
-                 (getVar $ big)  -- big is a variable
-                                                    -> Just False
-             | otherwise                            -> Nothing  --TODO-SUBTERM add a case small is in big -> Just True (care for cancellation operators!)
+             | big `redElem` small                  -> Just False  -- includes equality
+             | small `redElem` big                  -> Just True -- small /= big because of the previous condition
+             | otherwise                            -> Nothing
 
           Last (ltermNodeId' -> i)
             | isLast sys i                       -> Just True
@@ -1252,10 +1250,10 @@ alwaysBefore sys =
          ((i, j) `S.member` L.get sLessAtoms sys)
       || (j `S.member` D.reachableSet [i] lessRel)
 
--- | Computes whether there is a cycle @t0 ⊏ x0, ..., tn ⊏ xn@ in @dag@ such that @xi@ are variables and
--- @xi@ is syntactically in @t_i+1@ and not below a cancellation operator
-hasSubtermCycle :: [(LNTerm, LNTerm)] -> Bool
-hasSubtermCycle dag = maybe True (const False) $ foldM visitForest S.empty dag
+-- | Computes whether there is a cycle @t0 ⊏ x0, ..., tn ⊏ xn@ in @dag@ such that
+-- @xi@ is syntactically in @t_i+1@ and not below a reducible function symbol, see @elemNotBelowReducible@
+hasSubtermCycle :: FunSig -> [(LNTerm, LNTerm)] -> Bool
+hasSubtermCycle reducible dag = isNothing $ foldM visitForest S.empty dag
   where
     -- adapted from cyclic in Simple.hs but using tuples of LNTerm instead of LNTerm
     visitForest :: S.Set (LNTerm, LNTerm) -> (LNTerm, LNTerm) -> Maybe (S.Set (LNTerm, LNTerm))
@@ -1270,11 +1268,7 @@ hasSubtermCycle dag = maybe True (const False) $ foldM visitForest S.empty dag
       | otherwise            =
           S.insert x <$> foldM (findLoop parents') visited next
       where
-        containsXVar :: LNTerm -> Bool    -- Theory.Constraint.System
-        containsXVar term = case getVar (snd x) of
-          Just v -> (Var v) `elem` term  --TODO-SUBTERM: ignore variables below cancellation operators
-          Nothing -> False  -- snd x is not a var -> next = ∅
-        next     = [ (e,e') | (e,e') <- dag, containsXVar e]
+        next     = [ (e,e') | (e,e') <- dag, elemNotBelowReducible reducible (snd x) e]
         parents' = S.insert x parents
 
 -- | 'True' iff the given node id is guaranteed to be instantiated to an

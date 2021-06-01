@@ -25,6 +25,7 @@ module Term.Maude.Signature (
   , userACSyms
   , userACSyms'
   , irreducibleFunSyms
+  , reducibleFunSyms
   , rrulesForMaudeSig
   , noEqFunSyms
   , userSortsForMaudeSig
@@ -75,6 +76,7 @@ import qualified Data.Set as S
 import qualified Data.ByteString.Char8 as BC
 
 import qualified Text.PrettyPrint.Highlight as P
+import Debug.Trace
 
 ------------------------------------------------------------------------------
 -- Maude Signatures
@@ -95,6 +97,7 @@ data MaudeSig = MaudeSig  --TODO-MY add new field with custom sorts
                                           -- function symbols for DH, BP, and Multiset
                                           -- can be computed from enableX and stFunSyms
     , irreducibleFunSyms :: FunSig        -- ^ irreducible function symbols (can be computed)
+    , reducibleFunSyms   :: FunSig        -- ^ function symbols @f@ that have a rewriting rule @l→r∈R@ with @root(l)=f@
     , userSorts          :: S.Set String  -- ^ user-defined sorts
     , userACSyms         :: S.Set ACSym   -- ^ user-defined AC symbols
     }
@@ -102,25 +105,26 @@ data MaudeSig = MaudeSig  --TODO-MY add new field with custom sorts
 
 -- | Smart constructor for maude signatures. Computes funSyms and irreducibleFunSyms.
 maudeSig :: MaudeSig -> MaudeSig
-maudeSig msig@(MaudeSig {enableDH,enableBP,enableMSet,enableNat,enableXor,enableDiff=_,stFunSyms,stRules}) =
-    msig {enableDH=enableDH||enableBP, funSyms=allfuns, irreducibleFunSyms=irreduciblefuns}
+maudeSig msig@MaudeSig {enableDH, enableBP, enableMSet, enableNat, enableXor, enableDiff = _, stFunSyms, stRules} =
+    msig {enableDH=enableDH||enableBP, funSyms=allfuns, irreducibleFunSyms=irreduciblefuns, reducibleFunSyms=reducible}
   where
     -- TODO-UNCERTAIN: (todo from Cedric) Take into accounts user-defined AC function symbols.
-    allfuns = (S.map NoEq stFunSyms)
+    allfuns = S.map NoEq stFunSyms
                 `S.union` (if enableDH || enableBP then dhFunSig   else S.empty)
                 `S.union` (if enableBP             then bpFunSig   else S.empty)
                 `S.union` (if enableMSet           then msetFunSig else S.empty)
                 `S.union` (if enableNat            then natFunSig  else S.empty)
                 `S.union` (if enableXor            then xorFunSig  else S.empty)
-    irreduciblefuns = allfuns `S.difference` reducible
-    reducible =
-        S.fromList [ o | CtxtStRule (viewTerm -> FApp o _) _ <- S.toList stRules ]
-          `S.union` dhReducibleFunSig `S.union` bpReducibleFunSig `S.union` xorReducibleFunSig
+    irreduciblefuns = allfuns `S.difference` reducibleWithoutMult
+    reducibleWithoutMult =
+        S.fromList [ o | CtxtStRule (viewTerm -> FApp o _) _ <- S.toList stRules]
+          `S.union` dhReducibleFunSig `S.union` bpReducibleFunSig `S.union` xorReducibleFunSig  --careful! the AC Mult is missing here (probably intentionally)
+    reducible = S.fromList [ o | RRule (viewTerm -> FApp o _) _ <- S.toList $ rrulesForMaudeSig msig ]
 
 -- | A monoid instance to combine maude signatures.
 instance Semigroup MaudeSig where
-    MaudeSig dh1 bp1 mset1 nat1 xor1 diff1 stFunSyms1 stRules1 _ _ uSorts1 uSyms1 <>
-      MaudeSig dh2 bp2 mset2 nat2 xor2 diff2 stFunSyms2 stRules2 _ _ uSorts2 uSyms2 =
+    MaudeSig dh1 bp1 mset1 nat1 xor1 diff1 stFunSyms1 stRules1 _ _ _ uSorts1 uSyms1 <>
+      MaudeSig dh2 bp2 mset2 nat2 xor2 diff2 stFunSyms2 stRules2 _ _ _ uSorts2 uSyms2 =
           maudeSig (mempty {enableDH=dh1||dh2
                            ,enableBP=bp1||bp2
                            ,enableMSet=mset1||mset2
@@ -133,7 +137,7 @@ instance Semigroup MaudeSig where
                            ,userACSyms=S.union uSyms1 uSyms2})
 
 instance Monoid MaudeSig where
-    mempty = MaudeSig False False False False False False S.empty S.empty S.empty S.empty S.empty S.empty
+    mempty = MaudeSig False False False False False False S.empty S.empty S.empty S.empty S.empty S.empty S.empty
 
 -- | Non-AC function symbols.
 noEqFunSyms :: MaudeSig -> NoEqFunSig
