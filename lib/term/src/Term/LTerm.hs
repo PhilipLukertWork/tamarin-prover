@@ -374,7 +374,7 @@ flattenedACTerms _ term = [term]
 
 
 data SubtermSplit = SubtermD      (LNTerm, LNTerm)
-                  | NatSubtermD   (LNTerm, LNTerm, LNTerm)  -- small, small+newVar, big
+                  | NatSubtermD   (LNTerm, LNTerm, LNTerm, LVar)  -- small, small+newVar, big
                   | EqualD        (LNTerm, LNTerm)
                   | EqualDNewVar ((LNTerm, LNTerm), LVar)  -- a new variable has been introduced to the equation
                   | TrueD
@@ -400,8 +400,8 @@ splitSubterm reducible subterm = S.toList <$> recurse (SubtermD subterm)
     step :: MonadFresh m => (LNTerm, LNTerm) -> m (Maybe (S.Set SubtermSplit))
     step (small, big)
       | sortOfLNTerm small == LSortNat && sortOfLNTerm big == LSortNat = do  -- CR-rule S_nat (delayed)
-        ((smallPlusNewVar,_),_) <- acSubtermEqE NatPlus (small, big)
-        return $ Just $ S.singleton $ NatSubtermD (small, smallPlusNewVar, big)
+        ((smallPlusNewVar,_), newVar) <- acSubtermEqE NatPlus (small, big)
+        return $ Just $ S.singleton $ NatSubtermD (small, smallPlusNewVar, big, newVar)
       | big `redElem` small =  -- trivially false (big == small included)
         return $ Just S.empty  -- false
       | small `redElem` big =  -- trivially true

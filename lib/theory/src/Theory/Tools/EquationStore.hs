@@ -357,15 +357,17 @@ recurseSubterms hnd subterm = do
     reducible = reducibleFunSyms $ mhMaudeSig hnd
 
     toStoreEntry :: SubtermSplit -> [StoreEntry]
-    toStoreEntry TrueD                          = [SubstE emptySubstVFresh]
-    toStoreEntry (SubtermD st)                  = [SubtermE st]
-    toStoreEntry (NatSubtermD (s, sPlus, t))    = [NatSubtermE ((s,t), S.fromList $ getUnifiers (Equal sPlus t))]
-    toStoreEntry (EqualD (a,b))                 = map SubstE $ getUnifiers (Equal a b)
-    toStoreEntry (EqualDNewVar ((a,b), newVar)) = map SubstE unifWithoutNewVar
-                                              where
-                                                unif = getUnifiers (Equal a b)
-                                                filterDomain = [x | x <- concatMap domVFresh unif, x /= newVar]
-                                                unifWithoutNewVar = map (restrictVFresh filterDomain) unif
+    toStoreEntry TrueD                               = [SubstE emptySubstVFresh]
+    toStoreEntry (SubtermD st)                       = [SubtermE st]
+    toStoreEntry (NatSubtermD (s, sPlus, t, newVar)) = [NatSubtermE ((s,t), S.fromList $ unifWithoutNewVar (Equal sPlus t) newVar)]
+    toStoreEntry (EqualD (a,b))                      = map SubstE $ getUnifiers (Equal a b)
+    toStoreEntry (EqualDNewVar ((a,b), newVar))      = map SubstE $ unifWithoutNewVar (Equal a b) newVar
+
+    unifWithoutNewVar :: Equal LNTerm -> LVar -> [LNSubstVFresh]
+    unifWithoutNewVar eq newVar = map (restrictVFresh filterDomain) unif
+      where
+        unif = getUnifiers eq
+        filterDomain = [x | x <- concatMap domVFresh unif, x /= newVar]
 
     getUnifiers :: Equal LNTerm -> [LNSubstVFresh]
     getUnifiers eq = unifyLNTerm [eq] `runReader` hnd

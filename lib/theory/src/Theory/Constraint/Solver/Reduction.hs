@@ -463,11 +463,11 @@ insertFormula = do
               unless (deconstructed == [SubtermD st]) markAsSolved  -- if the equality holds, just insert the formula and return
               let lb = lTermToBTerm
               mapM_ (\destr -> case destr of
-                  TrueD                     -> void $ insert False gfalse
-                  (SubtermD (s,t))          -> modM sFormulas (S.insert $ gnotAtom $ Subterm (lb s) (lb t))
-                  (NatSubtermD (s, _, t))   -> void $ insert False (GAto (Subterm (lb t) ((lb s) ++: fAppNatOne)))  --change to t<s ∨ t=s
-                  (EqualD (a,b))            -> modM sFormulas (S.insert $ gnotAtom $ EqE (lb a) (lb b))
-                  (EqualDNewVar ((a,b), _)) -> modM sFormulas (S.insert $ gnotAtom $ EqE (lb a) (lb b))  --TODO - add existential quantifier here!
+                  TrueD                      -> void $ insert False gfalse
+                  (SubtermD (s,t))           -> modM sFormulas (S.insert $ gnotAtom $ Subterm (lb s) (lb t))
+                  (NatSubtermD (s, _, t, _)) -> void $ insert False (GAto (Subterm (lb t) ((lb s) ++: fAppNatOne)))  --change to t<s ∨ t=s
+                  (EqualD (a,b))             -> modM sFormulas (S.insert $ gnotAtom $ EqE (lb a) (lb b))
+                  (EqualDNewVar ((a,b), _))  -> modM sFormulas (S.insert $ gnotAtom $ EqE (lb a) (lb b))  --TODO - add existential quantifier here!
                 ) deconstructed
               return $ if deconstructed == [SubtermD st] then Unchanged else Changed
 
