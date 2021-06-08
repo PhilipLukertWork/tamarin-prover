@@ -878,7 +878,7 @@ foreachDisj hnd f =
     zipWithFlattened _ _                          = error "error is zipWithFlattened; read the comment to understand this procedure"
 
 
-testImpliedNatEq :: String
+{- testImpliedNatEq :: String
 testImpliedNatEq = show ("testImpliedNat", length tests, tests, map natSubtermEqualities tests)
   where
     e = fAppNatOne
@@ -895,7 +895,7 @@ testImpliedNatEq = show ("testImpliedNat", length tests, tests, map natSubtermEq
               (n2, e3)
              ]
       ]
-
+-}
 
 insertImpliedNatEq :: MonadFresh m => MaudeHandle -> StateT EqStore m (Maybe [SplitId])
 insertImpliedNatEq hnd = do
