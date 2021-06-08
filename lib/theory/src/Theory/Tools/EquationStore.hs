@@ -58,6 +58,7 @@ import           GHC.Generics          (Generic)
 import           Logic.Connectives
 import           Term.Unification
 import           Theory.Text.Pretty
+import           Term.Builtin.Convenience
 
 import           Control.Monad.Fresh
 import           Control.Monad.Bind
@@ -70,12 +71,19 @@ import           Control.Basics
 import           Control.DeepSeq
 import           Control.Monad.State   hiding (get, modify, put)
 import qualified Control.Monad.State   as MS
+import           Data.Array.ST
+import           Data.Array
+import qualified Data.Graph            as G
+import qualified Data.Tree             as T
+
+
 
 import           Data.Binary
 import qualified Data.Foldable         as F
 import           Data.List          (delete,find,intersect,intersperse,nub,(\\))
 import           Data.Maybe
 import qualified Data.Set              as S
+import qualified Data.Map              as M
 import           Extension.Data.Label  hiding (for, get)
 import qualified Extension.Data.Label  as L
 -- import           Extension.Data.Monoid
@@ -154,8 +162,8 @@ hasInvalidNatChain hnd = (liftM unifiersEmpty) . (mapM getNewVarEquation) . rawN
     unifiersEmpty list = null (unifyLNTerm list `runReader` hnd)
     getNewVarEquation :: MonadFresh m => (LNTerm, LNTerm) -> m (Equal LNTerm)
     getNewVarEquation (small, big) = do
-        var <- freshLVar "newVar" LSortNat  -- generate a new variable
-        let term = fAppAC NatPlus [small, varTerm var]  -- build the term = small + newVar
+        v <- freshLVar "newVar" LSortNat  -- generate a new variable
+        let term = fAppAC NatPlus [small, varTerm v]  -- build the term = small + newVar
         return $ Equal term big  -- small + newVar = big
 
 -- | The false conjunction. It is always identified with split number -1.
@@ -574,7 +582,8 @@ simp1 hnd isContr = do
           ids4 <- (: ids3) <$> foreachDisj hnd simpIdentify
           ids5 <- (: ids4) <$> foreachDisj hnd simpAbstractFun
           ids6 <- (: ids5) <$> foreachDisj hnd simpAbstractName
-          return $ if all isNothing ids6 then Nothing else (Just . concat . catMaybes) ids6
+          ids7 <- (: ids6) <$> insertImpliedNatEq hnd
+          return $ if all isNothing ids7 then Nothing else (Just . concat . catMaybes) ids7
 
 
 -- | Remove variable renamings in fresh substitutions.
@@ -865,6 +874,188 @@ foreachDisj hnd f =
     zipWithFlattened [] []                        = []
     zipWithFlattened (SubtermE _ : _) _           = error "at this stage, there should be no subterms"
     zipWithFlattened _ _                          = error "error is zipWithFlattened; read the comment to understand this procedure"
+
+
+testImpliedNatEq :: String
+testImpliedNatEq = show ("testImpliedNat", length tests, tests, map natSubtermEqualities tests)
+  where
+    e = fAppNatOne
+    e2 = e ++: e
+    e3 = e2 ++: e
+    e4 = e3 ++: e
+    tests = [[(n1, n2 ++: e3),
+              (n1 ++: n2 ++: e, e),
+              (e4, n1 ++: n3 ++: e),
+              (n3, n1 ++: e4)],
+             [(n1, e2)],
+             [(n1, n2 ++: e),
+              (e3, n1 ++: n2),
+              (n2, e3)
+             ]
+      ]
+
+
+insertImpliedNatEq :: MonadFresh m => MaudeHandle -> StateT EqStore m (Maybe [SplitId])
+insertImpliedNatEq hnd = do
+    eqs <- MS.get
+    let eq = natSubtermEqualities $ rawNatSubtermRel eqs
+    if null eq then
+      return Nothing
+     else do
+      (eqs2, maysplit, splitlist) <- addEqs hnd eq eqs
+      MS.put eqs2
+      return $ Just (splitlist ++ maybeToList maysplit)
+
+-- This procedure generates some (not all) equalities that are implied by the natSubterm relation.
+-- It filters the relation for UTVPI's (≤ 2 vars) and performs the algorithm from the following paper:
+-- "An Efficient Decision Procedure for UTVPI Constraints"
+natSubtermEqualities :: [(LNTerm, LNTerm)] -> [Equal LNTerm]
+natSubtermEqualities relation = {- trace (show (("natSubtermEqualities"
+                                      ,"relation", relation
+                                      ,"realEdges", realEdges
+                                      ,"vertices", vertices
+                                      ,"oneEdges", oneEdges)
+                                      ,("floydWarshall", floydWarshall
+                                      ,"tightenedEdges", tightenedEdges
+                                      ,"bellmanFord", bellmanFord
+                                      ,"slackEdges", slackEdges
+                                      ,"sccs", sccs
+                                      ,"equalities", equalities
+                                      ))) -} equalities
+      where
+
+      --True = positive
+      --False = negative
+      formatEdge :: (LNTerm, LNTerm) -> [(((Bool,LVar), (Bool,LVar)), Int)]  -- 0 elements for invalid (>2 vars); otherwise 1 or 2 elements
+      formatEdge (a, b) = case (flattenedACTerms NatPlus a, flattenedACTerms NatPlus b) of
+        (l, r) | length (getVars l ++ getVars r) == 1 -> [((from, to), d)]
+          where
+            d = 2 * (countOnes r - countOnes l - 1)
+            from = head $ map (True,) (getVars l) ++ map (False,) (getVars r)
+            to = first not from
+        (l, r) | length (getVars l ++ getVars r) == 2 -> zip (zip froms tos) ds
+          where
+            ds = replicate 2 (countOnes r - countOnes l - 1)
+            froms = map (True,) (getVars l) ++ map (False,) (getVars r)
+            tos = map (first not) (reverse froms)
+        _ -> []
+       where
+        getVars :: [LNTerm] -> [LVar]
+        getVars = mapMaybe getVar . filter (/= fAppNatOne)
+        countOnes :: [LNTerm] -> Int
+        countOnes = length . filter (== fAppNatOne)
+
+
+      realEdges :: [(((Bool,LVar), (Bool,LVar)), Int)]
+      realEdges = concatMap formatEdge relation
+
+      vertices :: [(Bool,LVar)]
+      vertices = S.toList $ S.fromList $ concatMap (\x -> [fst $ fst x, snd $ fst x]) realEdges
+
+      --intToVertex i = fromJust $ M.lookup i $ M.fromList $ zip [0 .. length vertices - 1] vertices
+      vertexToInt v = fromJust $ M.lookup v $ M.fromList $ zip vertices [0 .. length vertices - 1]
+
+      oneEdges :: [(((Bool,LVar), (Bool,LVar)), Int)]
+      oneEdges = map (\(_,x) -> (((False, x), (True, x)), -2)) $ filter fst vertices
+
+      rawEdges :: [(((Bool,LVar), (Bool,LVar)), Int)]
+      rawEdges = realEdges ++ oneEdges
+
+      inf :: Int
+      inf = (maxBound :: Int) `div` (2 :: Int)
+
+      floydWarshall :: Array Int Int
+      floydWarshall = trace (show ("fwSolution", getSolution)) getSolution
+        where
+          getSolution :: Array Int Int
+          getSolution = runSTArray $ do
+            let n = length vertices
+            solution <- newArray (0, n ^ 2 - 1) inf  --initialize solution to ∞
+            forM_ rawEdges $ \((from, to), w) -> do
+              writeArray solution (vertexToInt from * n + vertexToInt to) w  -- initialize edges to w
+            forM_ [0.. n - 1] $ \i -> do
+              writeArray solution (i*n + i) 0  -- initialize solution[i][i] to 0
+
+            forM_ [0.. n - 1] $ \k -> do  -- execute Floyd Warshall
+              forM_ [0.. n - 1] $ \i -> do
+                forM_ [0.. n - 1] $ \j -> do
+                  ij <- readArray solution (i*n + j)
+                  ik <- readArray solution (i*n + k)
+                  kj <- readArray solution (k*n + j)
+                  writeArray solution (i*n + j) (min ij $ ik + kj)
+            return solution
+
+      tightenedEdges :: [(((Bool,LVar), (Bool,LVar)), Int)]
+      tightenedEdges = mapMaybe buildEdge $ filter fst vertices
+        where
+          distToNeg v = floydWarshall ! (vertexToInt v * length vertices + vertexToInt (first not v))
+          buildEdge v = if even (distToNeg v) && (distToNeg v < inf `div` 2) then Nothing else Just $ ((v, first not v), distToNeg v - 1)
+
+      edges :: [(((Bool,LVar), (Bool,LVar)), Int)]
+      edges = rawEdges ++ tightenedEdges
+
+      bellmanFord :: Maybe (Array Int Int)
+      bellmanFord = trace (show ("bfSolution", getSolution)) $ if solvable getSolution then Just getSolution else Nothing
+       where
+        getSolution :: Array Int Int
+        getSolution = runSTArray $ do
+          solution <- newArray (0, length vertices - 1) 0
+          forM_ [0.. length vertices - 1] $ \_ -> do
+            forM_ edges $ \((from, to), w) -> do
+              distFrom <- readArray solution (vertexToInt from)
+              distTo <- readArray solution (vertexToInt to)
+              writeArray solution (vertexToInt to) (min distTo $ w + distFrom)
+          return solution
+
+        solvable :: Array Int Int -> Bool
+        solvable solution = and $ flip map edges $ \((from, to), w) -> let
+          distFrom = solution ! vertexToInt from
+          distTo = solution ! vertexToInt to
+          in w + distFrom >= distTo
+
+
+
+
+      slackEdges :: [((Bool,LVar), (Bool,LVar))]
+      slackEdges = case bellmanFord of
+        Nothing -> []
+        Just solution -> map fst $ flip filter edges $ \((from, to), w) -> let
+          distFrom = solution ! vertexToInt from
+          distTo = solution ! vertexToInt to
+          in w + distFrom == distTo
+
+      -- compute strongly connected components of slackEdges
+      sccs :: [[(Bool,LVar)]]
+      sccs = map (map ((\(a,_,_)->a) . nodeFromVertex) . T.flatten) (G.scc graph)
+        where
+          preparedEdges :: [((Bool,LVar), Int, [Int])]
+          preparedEdges = flip map vertices $ \v -> (
+            v,
+            vertexToInt v,
+            map (vertexToInt . snd) $ filter (\(from, _) -> from == v) slackEdges)
+          (graph, nodeFromVertex, _) = G.graphFromEdges preparedEdges
+
+      equalities :: [Equal LNTerm]
+      equalities = relationEqs ++ absoluteEqs  -- get equalities from scc and the graph
+        where
+          getValue vertex = case bellmanFord of
+            Nothing -> 0
+            Just solution -> solution ! vertexToInt vertex
+          smallest = map (foldr1 (\x y -> if getValue x < getValue y then x else y) ) sccs  -- finds the smallest variable for each scc
+          zipped = smallest `zip` map (filter fst) sccs  -- zips this smallest variable to the rest of the list
+          removedEq = map (\(x,ys) -> (x, delete x ys)) zipped  -- removes equal variables -> no equations like x=x arise
+          addN y n = iterate (++: fAppNatOne) (varTerm y) !! n  -- helper that adds n ones to a variable y
+          buildEq x y = Equal (varTerm (snd x)) $ addN (snd y) (getValue y - getValue x)  -- helper that builds x=y+n
+          relationEqs = concatMap (\(x,ys) -> map (buildEq x) ys) removedEq -- end result
+
+          duplicates = concatMap ((\xs -> xs \\ S.toList (S.fromList xs)) . map snd) sccs  --variables that occur with + and - in any scc
+          termN n = iterate (++: fAppNatOne) fAppNatOne !! (n-1)  -- the term that represents n (with n>0)
+          buildAbsoluteEq v = Equal (varTerm v) $ termN $ (getValue (False, v) - getValue (True, v)) `div` 2  -- helper that builds x=n
+          absoluteEqs = map buildAbsoluteEq duplicates  -- end result
+
+
+
+
 
 ------------------------------------------------------------------------------
 -- Pretty printing
