@@ -444,7 +444,7 @@ applyEqStore hnd asubst eqStore
     = do 
       newConjs <- mapM modifyOneConj $ L.get eqsConj eqStore
       let newEqStore = EqStore newsubst newConjs $ L.get eqsNextSplitId eqStore
-      let newSplitGoals = onlySingleSubtermSplits newEqStore \\ onlySingleSubtermSplits eqStore
+      let newSplitGoals = onlySingleSubtermSplits eqStore \\ onlySingleSubtermSplits newEqStore
       return $ (newEqStore, newSplitGoals)
     -- FIXME maybe this is more performant with modify and second instead of making a new EqStore
     -- old code (without fresh monad):
