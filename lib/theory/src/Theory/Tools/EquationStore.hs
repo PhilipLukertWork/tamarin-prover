@@ -967,7 +967,7 @@ natSubtermEqualities relation = {- trace (show (("natSubtermEqualities"
       inf = (maxBound :: Int) `div` (2 :: Int)
 
       floydWarshall :: Array Int Int
-      floydWarshall = trace (show ("fwSolution", getSolution)) getSolution
+      floydWarshall = {- trace (show ("fwSolution", getSolution)) -} getSolution
         where
           getSolution :: Array Int Int
           getSolution = runSTArray $ do
@@ -997,7 +997,7 @@ natSubtermEqualities relation = {- trace (show (("natSubtermEqualities"
       edges = rawEdges ++ tightenedEdges
 
       bellmanFord :: Maybe (Array Int Int)
-      bellmanFord = trace (show ("bfSolution", getSolution)) $ if solvable getSolution then Just getSolution else Nothing
+      bellmanFord = {- trace (show ("bfSolution", getSolution)) $ -} if solvable getSolution then Just getSolution else Nothing
        where
         getSolution :: Array Int Int
         getSolution = runSTArray $ do
