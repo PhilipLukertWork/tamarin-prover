@@ -357,11 +357,17 @@ recurseSubterms hnd subterm = do
     reducible = reducibleFunSyms $ mhMaudeSig hnd
 
     toStoreEntry :: SubtermSplit -> [StoreEntry]
-    toStoreEntry TrueD                               = [SubstE emptySubstVFresh]
-    toStoreEntry (SubtermD st)                       = [SubtermE st]
-    toStoreEntry (NatSubtermD (s, sPlus, t, newVar)) = [NatSubtermE ((s,t), S.fromList $ unifWithoutNewVar (Equal sPlus t) newVar)]
-    toStoreEntry (EqualD (a,b))                      = map SubstE $ getUnifiers (Equal a b)
-    toStoreEntry (EqualDNewVar ((a,b), newVar))      = map SubstE $ unifWithoutNewVar (Equal a b) newVar
+    toStoreEntry TrueD                   = [SubstE emptySubstVFresh]
+    toStoreEntry (SubtermD st)           = [SubtermE st]
+    toStoreEntry (NatSubtermD (s, t, v)) = [NatSubtermE ((s,t), S.fromList $ unifNatSubterm (s, t, v))]
+    toStoreEntry (EqualD (a,b))          = map SubstE $ getUnifiers (Equal a b)
+    toStoreEntry (ACNewVarD (a, b, v))   = map SubstE $ unifWithoutNewVar (Equal a b) v
+
+    unifNatSubterm :: (LNTerm, LNTerm, LVar) -> [LNSubstVFresh]
+    unifNatSubterm (small, big, v) | fAppNatOne `elem` flattenedACTerms NatPlus big
+      = getUnifiers (Equal small bigMinus1) ++ unifNatSubterm (small, bigMinus1, v)
+        where bigMinus1 = fAppAC NatPlus $ delete fAppNatOne $ flattenedACTerms NatPlus big
+    unifNatSubterm (small, big, v) = unifWithoutNewVar (Equal (fAppAC NatPlus [small, varTerm v]) big) v
 
     unifWithoutNewVar :: Equal LNTerm -> LVar -> [LNSubstVFresh]
     unifWithoutNewVar eq newVar = map (restrictVFresh filterDomain) unif

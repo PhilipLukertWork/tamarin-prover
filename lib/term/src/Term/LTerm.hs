@@ -121,6 +121,7 @@ module Term.LTerm (
 import           Text.PrettyPrint.Class
 
 -- import           Control.Applicative
+import           Control.Basics
 import           Control.DeepSeq
 import           Control.Monad.Bind
 import           Control.Monad.Identity
@@ -128,6 +129,7 @@ import qualified Control.Monad.Trans.PreciseFresh as Precise
 
 import           GHC.Generics                     (Generic)
 import           Data.Binary
+import qualified Data.List                        as L
 import qualified Data.DList                       as D
 import           Data.Foldable                    hiding (concatMap, elem, notElem, any)
 import           Data.Data
@@ -373,10 +375,10 @@ flattenedACTerms f (viewTerm -> FApp (AC sym) ts)
 flattenedACTerms _ term = [term]
 
 
-data SubtermSplit = SubtermD      (LNTerm, LNTerm)
-                  | NatSubtermD   (LNTerm, LNTerm, LNTerm, LVar)  -- small, small+newVar, big
-                  | EqualD        (LNTerm, LNTerm)
-                  | EqualDNewVar ((LNTerm, LNTerm), LVar)  -- a new variable has been introduced to the equation
+data SubtermSplit = SubtermD    (LNTerm, LNTerm)
+                  | NatSubtermD (LNTerm, LNTerm, LVar)  -- small, big, newVar
+                  | EqualD      (LNTerm, LNTerm)
+                  | ACNewVarD   (LNTerm, LNTerm, LVar)  -- small+newVar, big, newVar
                   | TrueD
   deriving (Eq, Ord, Show, Typeable, Data, Generic, NFData, Binary)
 
@@ -400,8 +402,11 @@ splitSubterm reducible subterm = S.toList <$> recurse (SubtermD subterm)
     step :: MonadFresh m => (LNTerm, LNTerm) -> m (Maybe (S.Set SubtermSplit))
     step (small, big)
       | sortOfLNTerm small == LSortNat && sortOfLNTerm big == LSortNat = do  -- CR-rule S_nat (delayed)
-        ((smallPlusNewVar,_), newVar) <- acSubtermEqE NatPlus (small, big)
-        return $ Just $ S.singleton $ NatSubtermD (small, smallPlusNewVar, big, newVar)
+        ac <- processAC NatPlus (small, big)
+        return $ case ac of
+          Right False -> Just S.empty
+          Right True -> Just $ S.singleton TrueD
+          Left tuple -> Just $ S.singleton $ NatSubtermD tuple
       | big `redElem` small =  -- trivially false (big == small included)
         return $ Just S.empty  -- false
       | small `redElem` big =  -- trivially true
@@ -415,8 +420,13 @@ splitSubterm reducible subterm = S.toList <$> recurse (SubtermD subterm)
         return Nothing
     step (small, big@(viewTerm -> FApp (AC f) _))  -- apply CR-rule S_subterm-ac-recurse
       | AC f `S.notMember` reducible = do
-        acSpecial <- EqualDNewVar <$> acSubtermEqE f (small, big)
-        return $ Just $ acSpecial `S.insert` S.unions (map (eqOrSubterm small) (flattenedACTerms f big))
+        ac <- processAC f (small, big)
+        return $ case ac of
+          Right False -> Just S.empty
+          Right True -> Just $ S.singleton TrueD
+          Left (nSmall, nBig, newVar) ->
+            let acSpecial = ACNewVarD (fAppAC f [nSmall, varTerm newVar], nBig, newVar)
+            in Just $ acSpecial `S.insert` S.unions (map (eqOrSubterm small) (flattenedACTerms f big))
     step (small, viewTerm -> FApp (NoEq f) ts)  -- apply CR-rule S_subterm-recurse
       | NoEq f `S.notMember` reducible = do
         return $ Just $ S.unions (map (eqOrSubterm small) ts)
@@ -431,13 +441,26 @@ splitSubterm reducible subterm = S.toList <$> recurse (SubtermD subterm)
     eqOrSubterm :: LNTerm -> LNTerm -> S.Set SubtermSplit
     eqOrSubterm s t = S.fromList [SubtermD (s, t), EqualD (s, t)]  -- the unifiers for the equation
 
-    -- returns the equation @small + newVar = big@ for the CR-rule S_neg-ac-recurse
-    acSubtermEqE :: MonadFresh m => ACSym -> (LNTerm, LNTerm) -> m ((LNTerm, LNTerm), LVar)
-    acSubtermEqE f (small, big) = do
-        let sort = sortOfLNTerm big  -- big has the sort of the ac operator
-        newVar <- freshLVar "newVar" sort  -- generate a new variable
-        let term = fAppAC f [small, varTerm newVar]  -- build the term = small + newVar
-        return ((term, big), newVar)  -- return equation small + newVar = big with newVar as annotation
+    -- returns the triple @((nSmall, nBig), newVar, ac)@
+    -- nSmall, nBig are small, big where terms are removed that were on both sides
+    -- newVar is for the CR-rule S_neg-ac-recurse
+    processAC :: MonadFresh m => ACSym -> (LNTerm, LNTerm) -> m (Either (LNTerm, LNTerm, LVar) Bool)
+    processAC f (small, big) = do
+        newVar <- freshLVar "newVar" (sortOfLNTerm big)  -- generate a new variable
+        return $ case lists of
+          (_, []) -> Right False
+          ([], _) -> Right True
+          (lSmall, lBig) -> Left (fAppAC f lSmall, fAppAC f lBig, newVar)
+        --let term = fAppAC f [nSmall, varTerm newVar]  -- build the term = small + newVar
+      where
+        -- removes terms that are on both sides of the subterm
+        -- lists have to be sorted before removeSame works
+        removeSame (a:as, b:bs) | a == b = removeSame (as,   bs)
+        removeSame (a:as, b:bs) | a < b  = first (a:) $ removeSame (as, b:bs)
+        removeSame (a:as, b:bs) | a > b  = second (b:) $ removeSame (a:as, bs)
+        removeSame x = x  -- one of the lists is empty
+
+        lists = removeSame (L.sort $ flattenedACTerms f small, L.sort $ flattenedACTerms f big)
 
 
 -- | @containsPrivate t@ returns @True@ if @t@ contains private function symbols.
