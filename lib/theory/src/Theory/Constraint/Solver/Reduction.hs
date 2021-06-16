@@ -460,14 +460,19 @@ insertFormula = do
               hnd <- getMaudeHandle
               let st = (bTermToLTerm i, bTermToLTerm j)
               deconstructed <- splitSubterm (reducibleFunSyms $ mhMaudeSig hnd) st
-              unless (deconstructed == [SubtermD st]) markAsSolved  -- if the equality holds, just insert the formula and return
+              let isUnchanged = case deconstructed of
+                                  [SubtermD x] | x == st -> True
+                                  [NatSubtermD (s, t, _)] | (s,t) == st -> True
+                                  _ -> False
+              unless isUnchanged markAsSolved  -- if the equality holds, just insert the formula and return
               let lb = lTermToBTerm
               mapM_ (\destr -> case destr of
-                  TrueD                   -> void $ insert False gfalse
-                  (SubtermD (s,t))        -> modM sFormulas (S.insert $ gnotAtom $ Subterm (lb s) (lb t))
-                  (NatSubtermD (s, t, _)) -> void $ insert False (GAto (Subterm (lb t) ((lb s) ++: fAppNatOne)))  --change to t<s ∨ t=s
-                  (EqualD (a,b))          -> modM sFormulas (S.insert $ gnotAtom $ EqE (lb a) (lb b))
-                  (ACNewVarD (a, b, _))   -> modM sFormulas (S.insert $ gnotAtom $ EqE (lb a) (lb b))  --TODO - add existential quantifier here!
+                  TrueD                                -> void $ insert False gfalse
+                  (SubtermD (s,t))                     -> modM sFormulas (S.insert $ gnotAtom $ Subterm (lb s) (lb t))
+                  (NatSubtermD (s, t, _)) | isMsgVar s -> modM sFormulas (S.insert $ gnotAtom $ Subterm (lb s) (lb t))
+                  (NatSubtermD (s, t, _))              -> void $ insert False (GAto (Subterm (lb t) ((lb s) ++: fAppNatOne)))  --change to t<s ∨ t=s
+                  (EqualD (a,b))                       -> modM sFormulas (S.insert $ gnotAtom $ EqE (lb a) (lb b))
+                  (ACNewVarD (a, b, _))                -> modM sFormulas (S.insert $ gnotAtom $ EqE (lb a) (lb b))
                 ) deconstructed
               return $ if deconstructed == [SubtermD st] then Unchanged else Changed
 

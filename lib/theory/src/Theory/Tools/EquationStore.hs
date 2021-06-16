@@ -365,9 +365,10 @@ recurseSubterms hnd subterm = do
 
     unifNatSubterm :: (LNTerm, LNTerm, LVar) -> [LNSubstVFresh]
     unifNatSubterm (small, big, v) | fAppNatOne `elem` flattenedACTerms NatPlus big
+                                  && flattenedACTerms NatPlus big /= []
       = getUnifiers (Equal small bigMinus1) ++ unifNatSubterm (small, bigMinus1, v)
         where bigMinus1 = fAppAC NatPlus $ delete fAppNatOne $ flattenedACTerms NatPlus big
-    unifNatSubterm (small, big, v) = unifWithoutNewVar (Equal (fAppAC NatPlus [small, varTerm v]) big) v
+    unifNatSubterm (small, big, v) = unifWithoutNewVar (Equal (small ++: varTerm v) big) v
 
     unifWithoutNewVar :: Equal LNTerm -> LVar -> [LNSubstVFresh]
     unifWithoutNewVar eq newVar = map (restrictVFresh filterDomain) unif

@@ -401,7 +401,7 @@ splitSubterm reducible subterm = S.toList <$> recurse (SubtermD subterm)
     -- It especially returns @Just []@ if @small ⊏ big@ is trivially false.
     step :: MonadFresh m => (LNTerm, LNTerm) -> m (Maybe (S.Set SubtermSplit))
     step (small, big)
-      | sortOfLNTerm small == LSortNat && sortOfLNTerm big == LSortNat = do  -- CR-rule S_nat (delayed)
+      | (sortOfLNTerm small == LSortNat || isMsgVar small) && sortOfLNTerm big == LSortNat = do  -- CR-rule S_nat (delayed)
         ac <- processAC NatPlus (small, big)
         return $ case ac of
           Right False -> Just S.empty
@@ -410,11 +410,11 @@ splitSubterm reducible subterm = S.toList <$> recurse (SubtermD subterm)
       | big `redElem` small =  -- trivially false (big == small included)
         return $ Just S.empty  -- false
       | small `redElem` big =  -- trivially true
-        return $ Just $ S.singleton TrueD
+        return $ Just $ S.singleton TrueD  -- true
     step (_, viewTerm -> Lit (Con _)) =  -- nothing can be a strict subterm of a constant
         return $ Just S.empty  -- false
     step (small, big@(viewTerm -> Lit (Var _)))
-      | isPubVar big || isFreshVar big || (sortOfLNTerm small /= LSortNat && sortOfLNTerm big == LSortNat) =  -- CR-rule S_invalid
+      | isPubVar big || isFreshVar big || (not (sortOfLNTerm small == LSortNat || isMsgVar small) && sortOfLNTerm big == LSortNat) =  -- CR-rule S_invalid
         return $ Just S.empty  -- false
     step (_, viewTerm -> Lit (Var _)) =  -- variable: do not recurse further
         return Nothing
