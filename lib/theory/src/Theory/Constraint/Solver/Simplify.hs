@@ -379,7 +379,12 @@ partialAtomValuation ctxt sys =
           Subterm small big
              | big `redElem` small                  -> Just False  -- includes equality
              | small `redElem` big                  -> Just True -- small /= big because of the previous condition
+--             | onlyOnes small && l small < l big &&
+--               sortOfLNTerm big == LSortNat        -> Just True
              | otherwise                            -> Nothing
+             where
+               onlyOnes t = all (fAppNatOne ==) $ flattenedACTerms NatPlus t
+               l t = length $ flattenedACTerms NatPlus t
 
           Last (ltermNodeId' -> i)
             | isLast sys i                       -> Just True
