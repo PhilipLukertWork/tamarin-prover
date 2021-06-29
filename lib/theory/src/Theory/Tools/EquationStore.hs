@@ -827,7 +827,8 @@ foreachDisj hnd f =
     go :: [(SplitId, S.Set StoreEntry)] -> [(SplitId, S.Set StoreEntry)] -> StateT EqStore m (Maybe [SplitId])
     go _     []               = return Nothing
     go lefts ((idx,d):rights) = do
-        b <- if not (null [x | SubtermE x <- S.toList d] && null [x | NatSubtermE x <- S.toList d])  --ensures that no (noNat-)Subterms are in this disjunction
+        b <- if not (null [x | SubtermE x <- S.toList d]) ||  --ensures that no (noNat-)Subterms are in this disjunction
+                length (flatten $ S.toAscList d) == 1  -- needs to be inserted to delay splitting of singleton unifiers of NatSubtermE's
           then return Nothing
           else lift $ f (flatten $ S.toAscList d)  --toAscList ensures that the order is the same
         case b of
