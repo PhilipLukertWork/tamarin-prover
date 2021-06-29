@@ -626,8 +626,8 @@ simpSingleton hnd = go [] =<< gets (getConj . L.get eqsConj)
     getSingletonSubst :: [StoreEntry] -> Maybe LNSubstVFresh
     getSingletonSubst [SubstE s] = Just s
     getSingletonSubst [NatSubtermE (_,ss)] = case S.toList ss of
-                                               [Left s]                    -> Just s  --CHARLIE: replace by Nothing
-                                               [Right (_,S.toList -> [s])] -> Just s  --CHARLIE: replace by Nothing
+                                               [Left s]                    -> Nothing  --CHARLIE: replace by Nothing
+                                               [Right (_,S.toList -> [s])] -> Nothing  --CHARLIE: replace by Nothing
                                                _                           -> Nothing
     getSingletonSubst _ = Nothing
 
@@ -827,7 +827,7 @@ foreachDisj hnd f =
     go :: [(SplitId, S.Set StoreEntry)] -> [(SplitId, S.Set StoreEntry)] -> StateT EqStore m (Maybe [SplitId])
     go _     []               = return Nothing
     go lefts ((idx,d):rights) = do
-        b <- if not $ null $ [x | SubtermE x <- S.toList d]  --ensures that no (noNat-)Subterms are in this disjunction
+        b <- if not (null [x | SubtermE x <- S.toList d] && null [x | NatSubtermE x <- S.toList d])  --ensures that no (noNat-)Subterms are in this disjunction
           then return Nothing
           else lift $ f (flatten $ S.toAscList d)  --toAscList ensures that the order is the same
         case b of
