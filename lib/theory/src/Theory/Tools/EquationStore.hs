@@ -585,7 +585,8 @@ simp1 hnd isContr = do
           b3 <- simpEmptyNat
           b4 <- simpEmptyDisj
           b5 <- simpIdentical
-          let ids1 = [Just [] | b1 || b2 || b3 || b4 || b5]
+          b6 <- simpRemoveDuplicates
+          let ids1 = [Just [] | b1 || b2 || b3 || b4 || b5 || b6]
           ids2 <- (: ids1) <$> simpSingleton hnd
           ids3 <- (: ids2) <$> foreachDisj hnd simpAbstractSortedVar
           ids4 <- (: ids3) <$> foreachDisj hnd simpIdentify
@@ -595,10 +596,20 @@ simp1 hnd isContr = do
           return $ if all isNothing ids7 then Nothing else (Just . concat . catMaybes) ids7
 
 
+simpRemoveDuplicates :: MonadFresh m => StateT EqStore m Bool
+simpRemoveDuplicates = do
+    Conj conj <- getM eqsConj
+    let newConj = filter (\x -> not $ any (subsumes x) conj) conj
+    eqsConj =: Conj newConj
+    return $ length newConj < length conj
+      where
+        subsumes (id1, entries1) (id2, entries2) = id1 /= id2 && entries1 `S.isSubsetOf` entries2
+
+
 -- | Remove variable renamings in fresh substitutions.
 simpRemoveRenamings :: MonadFresh m => StateT EqStore m Bool
 simpRemoveRenamings = do
-    Conj conj <- gets (L.get eqsConj)
+    Conj conj <- getM eqsConj
     let list = concat [getSubsts y | x <- conj, y <- S.toList $ snd x]  --all substitutions in all disjunctions
     if F.any (\subst -> domVFresh subst /= domVFresh (removeRenamings subst)) list
       then modM eqsConj (fmap (second $ S.map remove)) >> return True
