@@ -626,10 +626,15 @@ simpSingleton hnd = go [] =<< gets (getConj . L.get eqsConj)
     getSingletonSubst :: [StoreEntry] -> Maybe LNSubstVFresh
     getSingletonSubst [SubstE s] = Just s
     getSingletonSubst [NatSubtermE (_,ss)] = case S.toList ss of
-                                               [Left s]                    -> Nothing  --CHARLIE: replace by Nothing
-                                               [Right (_,S.toList -> [s])] -> Nothing  --CHARLIE: replace by Nothing
-                                               _                           -> Nothing
+       [Left s]                    -> onlySimpleSubst s
+       [Right (_,S.toList -> [s])] -> onlySimpleSubst s  -- I guess, this cannot happen, but it does not hurt
+       _                           -> Nothing
     getSingletonSubst _ = Nothing
+    
+    -- returns Just s if the substitution does not introduce more variables, otherwise, it returns Nothing
+    onlySimpleSubst :: LNSubstVFresh -> Maybe LNSubstVFresh 
+    onlySimpleSubst s | (S.size . S.fromList . varsRangeVFresh) s <= (S.size . S.fromList . domVFresh) s = Just s
+    onlySimpleSubst _                                                                                    = Nothing
 
 -- | Filter out identical substitutions
 --   which are not covered by the set data structure because they are split in NatSubtermE and SubstE.
@@ -827,8 +832,8 @@ foreachDisj hnd f =
     go :: [(SplitId, S.Set StoreEntry)] -> [(SplitId, S.Set StoreEntry)] -> StateT EqStore m (Maybe [SplitId])
     go _     []               = return Nothing
     go lefts ((idx,d):rights) = do
-        b <- if not (null [x | SubtermE x <- S.toList d]) ||  --ensures that no (noNat-)Subterms are in this disjunction
-                length (flatten $ S.toAscList d) == 1  -- needs to be inserted to delay splitting of singleton unifiers of NatSubtermE's
+        b <- if not (null [x | SubtermE x <- S.toList d] &&  --ensures that no (noNat-)Subterms are in this disjunction
+                     null [x | NatSubtermE x <- S.toList d])  -- I enabled it initially (not having this line), but it does non-helpful things (especially when simpSingleton is disabled for NatSubtermE)
           then return Nothing
           else lift $ f (flatten $ S.toAscList d)  --toAscList ensures that the order is the same
         case b of
@@ -868,7 +873,7 @@ foreachDisj hnd f =
         zipEithers [] [] = []
         zipEithers _ _ = error "error in zipWithFlattened>zipEithers; read the comment to understand this procedure"
     zipWithFlattened [] []                        = []
-    zipWithFlattened (SubtermE _ : _) _           = error "erro zipWithFlattened: at this stage, there should be no subterms"
+    zipWithFlattened (SubtermE _ : _) _           = error "error zipWithFlattened: at this stage, there should be no subterms"
     zipWithFlattened _ _                          = error "error in zipWithFlattened; read the comment to understand this procedure"
 
 
