@@ -30,6 +30,7 @@ module Theory.Tools.EquationStore (
   -- ** Queries
   , eqsIsFalse
   , rawSubtermRel
+  , isNatSubterm
 
 
   -- ** Adding equalities
@@ -197,6 +198,11 @@ rawSubtermRel store = [ st | [SubtermE st] <- entryLists]
 rawNatSubtermRel :: EqStore -> [(LNTerm,LNTerm)]
 rawNatSubtermRel store = [ st | [NatSubtermE (st,_)] <- entryLists]
    where entryLists = [S.toList $ snd disj | disj <- getConj $ L.get eqsConj store]
+
+isNatSubterm :: EqStore -> SplitId -> Bool
+isNatSubterm eqs id = case find ((id ==) . fst) $ getConj $ L.get eqsConj $ eqs of
+                        Just (_, S.toList -> [NatSubtermE _]) -> True
+                        _                                     -> False
 
 -- Instances
 ------------
@@ -630,9 +636,9 @@ simpSingleton hnd = go [] =<< gets (getConj . L.get eqsConj)
        [Right (_,S.toList -> [s])] -> onlySimpleSubst s  -- I guess, this cannot happen, but it does not hurt
        _                           -> Nothing
     getSingletonSubst _ = Nothing
-    
+
     -- returns Just s if the substitution does not introduce more variables, otherwise, it returns Nothing
-    onlySimpleSubst :: LNSubstVFresh -> Maybe LNSubstVFresh 
+    onlySimpleSubst :: LNSubstVFresh -> Maybe LNSubstVFresh
     onlySimpleSubst s | (S.size . S.fromList . varsRangeVFresh) s <= (S.size . S.fromList . domVFresh) s = Just s
     onlySimpleSubst _                                                                                    = Nothing
 
